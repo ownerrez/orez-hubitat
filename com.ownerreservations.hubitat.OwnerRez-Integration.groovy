@@ -42,6 +42,12 @@ preferences {
 }
 
 mappings {
+    path('/info') {
+        action: [
+            GET: 'apiGetInfo'
+        ]
+    }
+
     path('/devices') {
         action: [
             GET: 'apiGetDevices'
@@ -73,6 +79,14 @@ void appButtonHandler(String btnName) {
             break
     }
 }
+Map apiGetInfo() {
+    return [
+        hubId: getHubUID(),
+        appId: app.getId(),
+        endpoint: getFullApiServerUrl(),
+        location: location.name,
+        hub: location.hub.name,
+    ]}
 
 List apiGetDevices() {
     List resp = []
