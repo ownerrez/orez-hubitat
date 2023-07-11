@@ -63,6 +63,8 @@ String orezConnectUrl() {
 
     if (!this.createAccessToken) {
         baseUrl += "?hubId=${getHubUID()}&appId=${app.getId()}&accessToken=${state.accessToken}"
+        baseUrl += '&location=' + URLEncoder.encode(location.name)
+        baseUrl += '&hub=' + URLEncoder.encode(location.hub.name)
     }
 
     return baseUrl
