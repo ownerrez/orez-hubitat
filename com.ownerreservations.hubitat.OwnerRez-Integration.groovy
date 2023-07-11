@@ -1,49 +1,85 @@
 definition(
-    name: "OwnerRez Integration",
-    namespace: "com.ownerreservations.hubitat",
-    author: "OwnerRez, Inc",
-    description: "OwnerRez Hubitat Integration",
-    category: "Convenience",
-    iconUrl: "",
-    iconX2Url: ""
+    name: 'OwnerRez Integration',
+    namespace: 'com.ownerreservations.hubitat',
+    author: 'OwnerRez, Inc',
+    description: 'OwnerRez Hubitat Integration',
+    category: 'Convenience',
+    iconUrl: '',
+    iconX2Url: '',
+    singleInstance: true,
 )
 
 preferences {
-    page(name: "mainPage", title: "OwnerRez", install: true, uninstall: true) {
+    page(name: 'main', title: 'Setup', install: true, uninstall: true) {
+        section(title: 'Setup') {
+            input(name: 'locks', type: 'capability.lock', title: 'Locks', submitOnChange: true, multiple: true)
+        }
+
+        section(title: 'Connection') {
+            if (state.accessToken) {
+                if (!settings.locks || settings.locks.length == 0) {
+                    paragraph 'Please configure the locks before connecting to OwnerRez.'
+                }
+                else {
+                    paragraph 'Endpoint: ' + getFullApiServerUrl()
+                    paragraph 'Access Token: ' + state.accessToken
+                    href(title: 'Connect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl())
+                }
+            }
+            else {
+                paragraph 'Please generate an access token first.'
+                input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
+            }
+        }
+    }
+
+    page(name: 'debug', title: 'Debug') {
         section {
-            paragraph "Endpoint: " + getFullApiServerUrl()
-            paragraph "Access Token: " + state.accessToken
-            input(name: "btbAccessToken", type: "button", title: "Create Access Token")
-            input(name: "btnTest", type: "button", title: "Test Webhook")
-            input(name: "locks", type: "capability.lock", title: "Locks")
+            input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
+            input(name: 'btnTest', type: 'button', title: 'Test Webhook')
         }
     }
 }
 
 mappings {
-    path("/devices") {
+    path('/devices') {
         action: [
-            GET: "apiGetDevices"
+            GET: 'apiGetDevices'
         ]
     }
 }
 
-def appButtonHandler(String btnName) {
-    switch(btnName) {
-        case "btbAccessToken":
+void installed() {
+}
+
+String orezConnectUrl() {
+    String baseUrl = 'https://secure.dev.ownerreservations.com/settings/locks/HubitatConnect'
+
+    if (!this.createAccessToken) {
+        baseUrl += "?hubId=${getHubUID()}&appId=${app.getId()}&accessToken=${state.accessToken}"
+    }
+
+    return baseUrl
+}
+
+void appButtonHandler(String btnName) {
+    switch (btnName) {
+        case 'btbAccessToken':
             state.accessToken = createAccessToken()
-        case "btnTest":
-            httpPost("https://jignate.ddns.net/log/webhook/hubitat", "oh hi mark", { r ->
+        case 'btnTest':
+            httpPost('https://jignate.ddns.net/log/webhook/hubitat', 'oh hi mark', { r ->
                 log.debug r
             })
-        break
+            break
     }
 }
 
-def apiGetDevices() {
-    def resp = []
-    locks.each {
-        resp << [id: it.id, name: it.name, type: it.typeName, label: it.label]
+List apiGetDevices() {
+    List resp = []
+
+    locks.each { lock ->
+        resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label]
     }
+
     return resp
 }
