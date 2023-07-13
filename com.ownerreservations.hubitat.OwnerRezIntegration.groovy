@@ -4,6 +4,7 @@ definition(
     author: 'OwnerRez, Inc',
     description: 'OwnerRez Hubitat Integration',
     category: 'Convenience',
+    oauth: true,
     iconUrl: '',
     iconX2Url: '',
     singleInstance: true,
@@ -33,12 +34,7 @@ preferences {
         }
     }
 
-    page(name: 'debug', title: 'Debug') {
-        section {
-            input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
-            input(name: 'btnTest', type: 'button', title: 'Test Webhook')
-        }
-    }
+    page(name: 'debug', title: 'Debug')
 }
 
 mappings {
@@ -60,6 +56,8 @@ mappings {
         ]
     }
 }
+
+
 
 void installed() {
 }
@@ -85,6 +83,21 @@ void appButtonHandler(String btnName) {
                 log.debug r
             })
             break
+    }
+}
+
+def debug() {
+    dynamicPage(name: 'debug', title: 'Debug') {
+        section {
+            input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
+            input(name: 'btnTest', type: 'button', title: 'Test Webhook')
+        }
+        section(title: "Links") {
+            locks.each { lock ->
+                String url = getFullApiServerUrl() + "/devices/${lock.id}?access_token=${state.accessToken}"
+                href(title: url, style: 'external', url: url)
+            }
+        }
     }
 }
 

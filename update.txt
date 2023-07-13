@@ -1,0 +1,3 @@
+com.ownerreservations.hubitat
+OwnerRez Integration
+app com.ownerreservations.hubitat.OwnerRezIntegration.groovy bcd88cb0-cb98-4267-b2e9-c175e0ee212e cdd700f0-ee7e-4278-ba3c-9d5b3bee6aa5
