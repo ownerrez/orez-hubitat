@@ -53,6 +53,12 @@ mappings {
             GET: 'apiGetDevices'
         ]
     }
+
+    path('/devices/:deviceId') {
+        action: [
+            GET: 'apiGetDevice'
+        ]
+    }
 }
 
 void installed() {
@@ -81,14 +87,16 @@ void appButtonHandler(String btnName) {
             break
     }
 }
+
 Map apiGetInfo() {
     return [
         hubId: getHubUID(),
         appId: app.getId(),
         endpoint: getFullApiServerUrl(),
         location: location.name,
-        hub: location.hub.name,
-    ]}
+        name: location.hub.name,
+    ]
+}
 
 List apiGetDevices() {
     List resp = []
@@ -96,6 +104,51 @@ List apiGetDevices() {
     locks.each { lock ->
         resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label]
     }
+
+    return resp
+}
+
+Map apiGetDevice() {
+    log.debug "apiGetDevice: $params"
+
+    def deviceId = params.deviceId
+    def lock = locks.find { lock -> lock.id == deviceId }
+
+    if (!lock) {
+        return [ error: 'Device not found' ]
+    }
+
+    Map resp = [
+        id: lock.id,
+        name: lock.name,
+        type: lock.typeName,
+        label: lock.label,
+        displayName: lock.displayName,
+        attributes: lock.supportedAttributes.collect({ attr -> [
+            name: attr.name,
+            dataType: attr.dataType,
+            values: attr.values,
+            currentValue: lock.currentValue(attr.name),
+        ]}).collect({ attr -> 
+            switch (attr.dataType) {
+                case 'JSON_OBJECT':
+                    attr.currentValue = parseJson(attr.currentValue)
+                    break
+            }
+
+            return attr
+        }),
+        commands: lock.supportedCommands.collect({ cmd -> [
+            name: cmd.name,
+            arguments: cmd.arguments,
+            parameters: cmd.parameters.collect({ param -> [
+                name: param.name,
+                type: param.type,
+                description: param.description,
+            ]}),
+        ]}),
+        capabilities: lock.capabilities.collect({ cap -> cap.name }),
+    ]
 
     return resp
 }
