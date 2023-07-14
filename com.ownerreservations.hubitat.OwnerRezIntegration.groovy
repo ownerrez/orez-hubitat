@@ -55,6 +55,12 @@ mappings {
             GET: 'apiGetDevice'
         ]
     }
+
+    path('/devices/:deviceId/:command') {
+        action: [
+            POST: 'apiExecuteCommand'
+        ]
+    }
 }
 
 
@@ -138,12 +144,12 @@ Map apiGetDevice() {
         type: lock.typeName,
         label: lock.label,
         displayName: lock.displayName,
-        attributes: lock.supportedAttributes.collect({ attr -> [
+        attributes: lock.supportedAttributes.collect{ attr -> [
             name: attr.name,
             dataType: attr.dataType,
             values: attr.values,
             currentValue: lock.currentValue(attr.name),
-        ]}).collect({ attr -> 
+        ]}.collect{ attr -> 
             switch (attr.dataType) {
                 case 'JSON_OBJECT':
                     attr.currentValue = parseJson(attr.currentValue)
@@ -151,18 +157,41 @@ Map apiGetDevice() {
             }
 
             return attr
-        }),
-        commands: lock.supportedCommands.collect({ cmd -> [
+        },
+        commands: lock.supportedCommands.collect{ cmd -> [
             name: cmd.name,
             arguments: cmd.arguments,
-            parameters: cmd.parameters.collect({ param -> [
+            parameters: cmd.parameters.collect{ param -> [
                 name: param.name,
                 type: param.type,
                 description: param.description,
-            ]}),
-        ]}),
-        capabilities: lock.capabilities.collect({ cap -> cap.name }),
+            ]},
+        ]},
+        capabilities: lock.capabilities.collect{ cap -> cap.name },
     ]
 
     return resp
+}
+
+def apiExecuteCommand() {
+    log.debug "apiGetDevice: $params"
+
+    def deviceId = params.deviceId
+    def lock = locks.find { lock -> lock.id == deviceId }
+
+    if (!lock) {
+        return [ error: 'Device not found' ]
+    }
+
+    def command = params.command
+    def cmd = lock.supportedCommands.find { cmd -> cmd.name == command }
+    if (!cmd) {
+        return [ error: 'Command not found' ]
+    }
+
+    try {
+        return lock."$command"(params)
+    } catch (e) {
+        return [ error: e.message ]
+    }
 }
