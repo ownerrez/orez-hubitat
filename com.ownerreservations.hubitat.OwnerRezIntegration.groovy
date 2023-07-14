@@ -65,10 +65,10 @@ void installed() {
 String orezConnectUrl() {
     String baseUrl = 'https://secure.dev.ownerreservations.com/settings/locks/HubitatConnect'
 
-    if (!this.createAccessToken) {
+    if (state.accessToken) {
         baseUrl += "?hubId=${getHubUID()}&appId=${app.getId()}&accessToken=${state.accessToken}"
-        baseUrl += '&location=' + URLEncoder.encode(location.name)
         baseUrl += '&hub=' + URLEncoder.encode(location.hub.name)
+        baseUrl += '&location=' + URLEncoder.encode(location.name)
     }
 
     return baseUrl
@@ -78,11 +78,12 @@ void appButtonHandler(String btnName) {
     switch (btnName) {
         case 'btbAccessToken':
             state.accessToken = createAccessToken()
+        break
         case 'btnTest':
             httpPost('https://jignate.ddns.net/log/webhook/hubitat', 'oh hi mark', { r ->
                 log.debug r
             })
-            break
+        break
     }
 }
 
