@@ -66,6 +66,7 @@ mappings {
 
 
 void installed() {
+    state.bookings = [:]
 }
 
 String orezConnectUrl() {
@@ -190,7 +191,21 @@ def apiExecuteCommand() {
     }
 
     try {
-        return lock."$command"(params)
+        switch (command) {
+            case 'lock':
+            case 'unlock':
+            case 'refresh':
+            case 'configure':
+                return lock."$command"()
+            case 'deleteCode':
+                return lock.deleteCode(params.codePosition)
+            case 'setCode':
+                return lock.setCode(params.codePosition, params.pinCode, params.name)
+            case 'setCodeLength':
+                return lock.setCodeLength(params.pinCodeLength)
+            default:
+                return [ error: 'Command not supported' ]
+        }
     } catch (e) {
         return [ error: e.message ]
     }
