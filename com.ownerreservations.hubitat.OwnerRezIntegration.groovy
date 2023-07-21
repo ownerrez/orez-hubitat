@@ -1,3 +1,6 @@
+String getOrezBaseSecureUrl() { 'https://secure.dev.ownerreservations.com' }
+String getOrezBaseFastUrl() { 'https://jignate.ddns.net/log' }
+
 definition(
     name: 'OwnerRez Integration',
     namespace: 'com.ownerreservations.hubitat',
@@ -24,7 +27,7 @@ preferences {
                 else {
                     paragraph 'Endpoint: ' + getFullApiServerUrl()
                     paragraph 'Access Token: ' + state.accessToken
-                    href(title: 'Connect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl())
+                    href(title: 'Connect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
                 }
             }
             else {
@@ -66,29 +69,43 @@ mappings {
 
 
 void installed() {
+    // Initialize bookings map
     state.bookings = [:]
 }
 
-String orezConnectUrl() {
-    String baseUrl = 'https://secure.dev.ownerreservations.com/settings/locks/HubitatConnect'
+String getOrezConnectUrl() {
+    String connectUrl = orezBaseSecureUrl + '/settings/locks/HubitatConnect'
 
     if (state.accessToken) {
-        baseUrl += "?hubId=${getHubUID()}&appId=${app.getId()}&accessToken=${state.accessToken}"
-        baseUrl += '&hub=' + URLEncoder.encode(location.hub.name)
-        baseUrl += '&location=' + URLEncoder.encode(location.name)
+        connectUrl += "?hubId=${getHubUID()}&appId=${app.getId()}&accessToken=${state.accessToken}"
+        connectUrl += '&hub=' + URLEncoder.encode(location.hub.name)
+        connectUrl += '&location=' + URLEncoder.encode(location.name)
     }
 
-    return baseUrl
+    return connectUrl
 }
 
 void appButtonHandler(String btnName) {
+    log.debug "appButtonHandler: $btnName"
+
     switch (btnName) {
         case 'btbAccessToken':
             state.accessToken = createAccessToken()
         break
         case 'btnTest':
-            httpPost('https://jignate.ddns.net/log/webhook/hubitat', 'oh hi mark', { r ->
-                log.debug r
+            Map testEvent = [
+                name: 'test',
+                value: 'test',
+                displayName: 'Test Webhook',
+                deviceId: null,
+                descriptionText: null,
+                unit: null,
+                type: null,
+                data: null
+            ]
+
+            orezHttpPostJson('/webhook/hubitat', testEvent, { r ->
+                log.debug "Test Webhook: ${r.data}"
             })
         break
     }
@@ -100,13 +117,32 @@ def debug() {
             input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
             input(name: 'btnTest', type: 'button', title: 'Test Webhook')
         }
-        section(title: "Links") {
+        section(title: 'Links') {
             locks.each { lock ->
                 String url = getFullApiServerUrl() + "/devices/${lock.id}?access_token=${state.accessToken}"
                 href(title: url, style: 'external', url: url)
             }
         }
     }
+}
+
+void orezHttpPostJson(String uri, Map body, Closure closure) {
+    log.debug "orezHttpPostJson: $uri, $body"
+    log.debug "orezBaseFastUrl: $orezBaseFastUrl"
+
+    Map params = [
+        uri: orezBaseFastUrl,
+        path: uri,
+        contentType: 'application/json',
+        body: body,
+        headers: [
+            'X-Hubitat-Hub-Id': getHubUID(),
+            'X-Hubitat-App-Id': app.getId(),
+            'X-Hubitat-Access-Token': state.accessToken,
+        ]
+    ]
+
+    httpPostJson(params, closure)
 }
 
 Map apiGetInfo() {
@@ -120,6 +156,8 @@ Map apiGetInfo() {
 }
 
 List apiGetDevices() {
+    log.debug 'apiGetDevice'
+
     List resp = []
 
     locks.each { lock ->
@@ -175,7 +213,7 @@ Map apiGetDevice() {
 }
 
 def apiExecuteCommand() {
-    log.debug "apiGetDevice: $params"
+    log.debug "apiExecuteCommand: $params ${request.JSON}"
 
     def deviceId = params.deviceId
     def lock = locks.find { lock -> lock.id == deviceId }
@@ -190,6 +228,10 @@ def apiExecuteCommand() {
         return [ error: 'Command not found' ]
     }
 
+    if (request.JSON == null) {
+        return [ error: 'No JSON body' ]
+    }
+
     try {
         switch (command) {
             case 'lock':
@@ -198,11 +240,11 @@ def apiExecuteCommand() {
             case 'configure':
                 return lock."$command"()
             case 'deleteCode':
-                return lock.deleteCode(params.codePosition)
+                return lock.deleteCode(request.JSON.codePosition)
             case 'setCode':
-                return lock.setCode(params.codePosition, params.pinCode, params.name)
+                return lock.setCode(request.JSON.codePosition, request.JSON.pinCode, request.JSON.name)
             case 'setCodeLength':
-                return lock.setCodeLength(params.pinCodeLength)
+                return lock.setCodeLength(request.JSON.pinCodeLength)
             default:
                 return [ error: 'Command not supported' ]
         }
