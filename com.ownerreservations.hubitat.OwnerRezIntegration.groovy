@@ -16,7 +16,7 @@ definition(
 preferences {
     page(name: 'main', title: 'Setup', install: true, uninstall: true) {
         section(title: 'Setup') {
-            input(name: 'locks', type: 'capability.lock', title: 'Locks', submitOnChange: true, multiple: true)
+            input(name: 'locks', type: 'capability.lockCodes', title: 'Locks', submitOnChange: true, multiple: true)
         }
 
         section(title: 'Connection') {
@@ -36,6 +36,7 @@ preferences {
         }
     }
 
+    // Debug page must be navigated to manually
     page(name: 'debug', title: 'Debug')
 }
 
@@ -63,6 +64,20 @@ mappings {
             POST: 'apiExecuteCommand'
         ]
     }
+
+    path('/sync') {
+        action: [
+            PUT: 'apiSync'
+        ]
+    }
+
+    path('/sync/:bookingId') {
+        action: [
+            POST: 'apiSyncBooking',
+            PUT: 'apiSyncBooking',
+            DELETE: 'apiSyncBooking',
+        ]
+    }
 }
 
 // Only gets called when the user clicks "Done" on the main page
@@ -74,6 +89,7 @@ void installed() {
     state.accessToken = createAccessToken()
 
     subscribeToEvents()
+    scheduleEvents(null)
 }
 
 void updated() {
@@ -87,12 +103,16 @@ void updated() {
         state.accessToken = createAccessToken()
     }
 
+    Map bookings = helperGetBookings(state.bookings)
+
     subscribeToEvents()
+    scheduleEvents(bookings)
 }
 
 void subscribeToEvents() {
     log.debug 'subscribeToEvents'
 
+    // Remove old subscriptions from potentially removed locks
     unsubscribe()
 
     // Separate handler for each event for future flexibility
@@ -105,9 +125,45 @@ void subscribeToEvents() {
     subscribe(locks, 'codeLength', codeLengthHandler)
 }
 
+void scheduleEvents(Map bookings) {
+    log.debug 'scheduleEvents'
+
+    // Remove old scheduled tasks
+    unschedule()
+
+    // Schedule tasks
+    if (bookings) {
+        Map nextBooking = helperFindNextBooking(bookings, false)
+        if (nextBooking) {
+            // Schedule reconcileDoorCodes for next booking
+            runOnce(nextBooking.checkIn, 'reconcileDoorCodes', [overwrite: false])
+            runOnce(nextBooking.checkOut, 'reconcileDoorCodes', [overwrite: false])
+        }
+    }
+}
+
+void reconcileDoorCodes(Map bookings) {
+    log.debug 'reconcileDoorCodes'
+
+    // Iterate through all locks
+    locks.each { lock ->
+        log.trace "reconcileDoorCodes: ${lock.name}"
+        // Get the lock's current codes
+        Map codes = parseJson(lock.currentValue('lockCodes'))
+        log.trace "reconcileDoorCodes: ${codes}"
+        Map currentCodes = helperOnlyOrezCodes(codes)
+
+        // Remove all codes that are not in the current bookings
+        currentCodes.each { code ->
+        }
+    }
+
+}
+
 void webhook(e) {
     log.debug "webhook: ${e.name}"
 
+    // Normalize the event payload
     Map payload = [
         id: e.id,
         deviceId: e.deviceId,
@@ -193,6 +249,9 @@ void appButtonHandler(String btnName) {
 def debug() {
     dynamicPage(name: 'debug', title: 'Debug') {
         section {
+            paragraph "helperFindNextBooking: ${helperFindNextBooking(state.bookings)}"
+        }
+        section {
             input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
             input(name: 'btnTest', type: 'button', title: 'Test Webhook')
         }
@@ -233,6 +292,8 @@ Map apiGetInfo() {
         endpoint: getFullApiServerUrl(),
         location: location.name,
         name: location.hub.name,
+        bookings: state.bookings,
+        nextBooking: helperFindNextBooking(state.bookings),
     ]
 }
 
@@ -333,4 +394,79 @@ def apiExecuteCommand() {
     } catch (e) {
         return [ error: e.message ]
     }
+}
+
+Map apiSync() {
+    log.debug "apiSync ${request.JSON}"
+
+    state.bookings = helperGetBookings(request.JSON)
+    scheduleEvents(state.bookings)
+    reconcileDoorCodes(state.bookings)
+
+    return [
+        bookings: state.bookings,
+        nextBooking: helperFindNextBooking(state.bookings, false),
+    ]
+}
+
+Map apiSyncBooking() {
+    log.debug "apiSync ${request.method} ${param.bookingId} ${request.JSON}"
+
+    return [
+        bookings: state.bookings,
+        nextBooking: helperFindNextBooking(state.bookings),
+    ]
+}
+
+// Help functions
+
+// Format booking, and only return future bookings
+Map helperGetBookings(Map bookings) {
+    log.debug 'helperGetBookings'
+    Date now = new Date()
+
+    return bookings.collect { key, booking ->
+        log.trace "helperGetBookings state.bookings.collect ${key} ${booking}"
+        booking.checkIn = toDateTime(booking.checkIn)
+        booking.checkOut = toDateTime(booking.checkOut)
+        return booking
+    }
+    .findAll { booking ->
+        return booking.checkIn >= now || booking.checkOut >= now
+    }
+    .collectEntries { booking ->
+        log.trace "helperGetBookings state.bookings.collectEntries ${booking}"
+        return [ booking.id, booking ]
+    }
+}
+
+Map helperFindNextBooking(Map bookings, boolean format = true) {
+    log.debug "helperFindNextBooking"
+
+    Map _bookings = format ? helperGetBookings(bookings) : bookings
+
+    return _bookings.inject(null) { nextBooking, key, booking ->
+        if (nextBooking == null) {
+            return booking
+        }
+
+        if (booking.checkIn < nextBooking.checkIn) {
+            return booking
+        }
+
+        return nextBooking
+    }
+}
+
+Map helperOnlyOrezCodes(Map codes) {
+    log.debug "helperOnlyOrezCodes"
+    return codes
+        .findAll { key, code -> code.name.startsWith('ORB') }
+        .collectEntries { key, code ->
+            // Split name on dash to get bookingId
+            String[] parts = code.name.split('-')
+            code.key = key
+            code.bookingId = parts[0]
+            return [ key, code ]
+        }
 }
