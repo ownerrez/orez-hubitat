@@ -24,15 +24,14 @@ preferences {
                 if (!settings.locks || settings.locks.length == 0) {
                     paragraph 'Please configure the locks before connecting to OwnerRez.'
                 }
+                else if (!state.accessToken) {
+                    paragraph 'Please click "Done" to complete setup before connecting to OwnerRez.'
+                }
                 else {
                     paragraph 'Endpoint: ' + getFullApiServerUrl()
                     paragraph 'Access Token: ' + state.accessToken
                     href(title: 'Connect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
                 }
-            }
-            else {
-                paragraph 'Please generate an access token first.'
-                input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
             }
         }
     }
@@ -66,11 +65,91 @@ mappings {
     }
 }
 
-
-
+// Only gets called when the user clicks "Done" on the main page
 void installed() {
+    log.debug 'installed'
+
     // Initialize bookings map
     state.bookings = [:]
+    state.accessToken = createAccessToken()
+
+    subscribeToEvents()
+}
+
+void updated() {
+    log.debug 'updated'
+
+    if (!state.bookings) {
+        state.bookings = [:]
+    }
+
+    if (!state.accessToken) {
+        state.accessToken = createAccessToken()
+    }
+
+    subscribeToEvents()
+}
+
+void subscribeToEvents() {
+    log.debug 'subscribeToEvents'
+
+    unsubscribe()
+
+    // Separate handler for each event for future flexibility
+    subscribe(locks, 'lock', lockHandler)
+    subscribe(locks, 'unlock', lockHandler)
+    subscribe(locks, 'lastCodeName', lastCodeNameHandler)
+    subscribe(locks, 'lockCodes', lockCodesHandler)
+    subscribe(locks, 'codeChanged', codeChangedHandler)
+    subscribe(locks, 'maxCodes', maxCodesHandler)
+    subscribe(locks, 'codeLength', codeLengthHandler)
+}
+
+void webhook(e) {
+    log.debug "webhook: ${e.name}"
+
+    Map payload = [
+        id: e.id,
+        deviceId: e.deviceId,
+        name: e.name,
+        displayName: e.displayName,
+        source: e.source,
+        value: e.value,
+        data: e.jsonData,
+        descriptionText: e.descriptionText,
+        isStateChange: e.isStateChange,
+        type: e.type,
+        date: e.date,
+        unit: e.unit,
+    ]
+
+    orezHttpPostJson('/webhook/hubitat', payload, { r ->
+        log.debug "Webhook: ${r.data}"
+    })
+}
+
+void lockHandler(e) {
+    webhook(e)
+}
+
+void lastCodeNameHandler(e) {
+    webhook(e)
+}
+
+void lockCodesHandler(e) {
+    webhook(e)
+}
+
+void codeChangedHandler(e) {
+    webhook(e)
+}
+
+void maxCodesHandler(e) {
+    webhook(e)
+}
+
+void codeLengthHandler(e) {
+    webhook(e)
 }
 
 String getOrezConnectUrl() {
@@ -146,6 +225,8 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
 }
 
 Map apiGetInfo() {
+    log.debug 'apiGetInfo'
+
     return [
         hubId: getHubUID(),
         appId: app.getId(),
@@ -183,12 +264,13 @@ Map apiGetDevice() {
         type: lock.typeName,
         label: lock.label,
         displayName: lock.displayName,
-        attributes: lock.supportedAttributes.collect{ attr -> [
+        attributes: lock.supportedAttributes.collect { attr ->
+        [
             name: attr.name,
             dataType: attr.dataType,
             values: attr.values,
             currentValue: lock.currentValue(attr.name),
-        ]}.collect{ attr -> 
+        ]}.collect { attr ->
             switch (attr.dataType) {
                 case 'JSON_OBJECT':
                     attr.currentValue = parseJson(attr.currentValue)
@@ -197,16 +279,16 @@ Map apiGetDevice() {
 
             return attr
         },
-        commands: lock.supportedCommands.collect{ cmd -> [
+        commands: lock.supportedCommands.collect { cmd -> [
             name: cmd.name,
             arguments: cmd.arguments,
-            parameters: cmd.parameters.collect{ param -> [
+            parameters: cmd.parameters.collect { param -> [
                 name: param.name,
                 type: param.type,
                 description: param.description,
             ]},
         ]},
-        capabilities: lock.capabilities.collect{ cap -> cap.name },
+        capabilities: lock.capabilities.collect { cap -> cap.name },
     ]
 
     return resp
