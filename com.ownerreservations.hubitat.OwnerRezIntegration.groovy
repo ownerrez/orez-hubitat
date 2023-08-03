@@ -290,9 +290,10 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
     httpPostJson(params, closure)
 }
 
-Map orezHttpResponseJson(def data) {
+Map orezHttpResponseJson(def data, int status = 200) {
     return [
         renderMethod: true,
+        status: status,
         contentType: 'application/json',
         headers: [
             'X-Hubitat-Orez-Version': orezAppVersion,
@@ -335,7 +336,7 @@ Map apiGetDevice() {
     def lock = locks.find { lock -> lock.id == deviceId }
 
     if (!lock) {
-        return [ error: 'Device not found' ]
+        return orezHttpResponseJson([ error: 'Device not found' ], 404)
     }
 
     Map resp = [
@@ -381,18 +382,18 @@ def apiExecuteCommand() {
     def lock = locks.find { lock -> lock.id == deviceId }
 
     if (!lock) {
-        return [ error: 'Device not found' ]
+        return orezHttpResponseJson([ error: 'Device not found' ], 404)
     }
 
     def command = params.command
     def cmd = lock.supportedCommands.find { cmd -> cmd.name == command }
 
     if (!cmd) {
-        return [ error: 'Command not found' ]
+        return orezHttpResponseJson([ error: 'Command not found' ], 404)
     }
 
     if (request.JSON == null) {
-        return [ error: 'No JSON body' ]
+        return orezHttpResponseJson([ error: 'No JSON body' ], 400)
     }
 
     try {
@@ -409,10 +410,10 @@ def apiExecuteCommand() {
             case 'setCodeLength':
                 return lock.setCodeLength(request.JSON.pinCodeLength)
             default:
-                return [ error: 'Command not supported' ]
+                return orezHttpResponseJson([ error: 'Command not supported' ], 400)
         }
     } catch (e) {
-        return [ error: e.message ]
+        return orezHttpResponseJson([ error: e.message ], 500)
     }
 }
 
@@ -481,7 +482,7 @@ Map helperFindNextBooking(Map bookings, boolean format = true) {
 
 Map helperOnlyOrezCodes(Map codes) {
     log.debug 'helperOnlyOrezCodes'
-    
+
     return codes
         .findAll { key, code -> code.name.startsWith('ORB') }
         .collectEntries { key, code ->
