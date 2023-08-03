@@ -1,5 +1,8 @@
+import groovy.json.JsonOutput
+
 String getOrezBaseSecureUrl() { 'https://secure.dev.ownerreservations.com' }
 String getOrezBaseFastUrl() { 'https://jignate.ddns.net/log' }
+String getOrezAppVersion() { '1.0.0-alpha' } // major.minor.patch[-prerelease] 
 
 definition(
     name: 'OwnerRez Integration',
@@ -212,9 +215,12 @@ String getOrezConnectUrl() {
     String connectUrl = orezBaseSecureUrl + '/settings/locks/HubitatConnect'
 
     if (state.accessToken) {
-        connectUrl += "?hubId=${getHubUID()}&appId=${app.getId()}&accessToken=${state.accessToken}"
+        connectUrl += '?'
+        connectUrl += '&hubId=' + URLEncoder.encode(hubUID)
+        connectUrl += '&appId=' + URLEncoder.encode(app.id.toString())
+        connectUrl += '&accessToken=' + URLEncoder.encode(state.accessToken)
+        connectUrl += '&version=' + URLEncoder.encode(orezAppVersion)
         connectUrl += '&hub=' + URLEncoder.encode(location.hub.name)
-        connectUrl += '&location=' + URLEncoder.encode(location.name)
     }
 
     return connectUrl
@@ -257,7 +263,7 @@ def debug() {
         }
         section(title: 'Links') {
             locks.each { lock ->
-                String url = getFullApiServerUrl() + "/devices/${lock.id}?access_token=${state.accessToken}"
+                String url = fullApiServerUrl + "/devices/${lock.id}?access_token=${state.accessToken}"
                 href(title: url, style: 'external', url: url)
             }
         }
@@ -274,30 +280,43 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
         contentType: 'application/json',
         body: body,
         headers: [
-            'X-Hubitat-Hub-Id': getHubUID(),
-            'X-Hubitat-App-Id': app.getId(),
+            'X-Hubitat-Hub-Id': hubUID,
+            'X-Hubitat-App-Id': app.id,
             'X-Hubitat-Access-Token': state.accessToken,
+            'X-Hubitat-Orez-Version': orezAppVersion,
         ]
     ]
 
     httpPostJson(params, closure)
 }
 
+Map orezHttpResponseJson(def data) {
+    return [
+        renderMethod: true,
+        contentType: 'application/json',
+        headers: [
+            'X-Hubitat-Orez-Version': orezAppVersion,
+        ],
+        data: JsonOutput.toJson(data),
+    ]
+}
+
 Map apiGetInfo() {
     log.debug 'apiGetInfo'
 
-    return [
-        hubId: getHubUID(),
-        appId: app.getId(),
-        endpoint: getFullApiServerUrl(),
+    return orezHttpResponseJson([
+        hubId: hubUID,
+        appId: app.id,
+        endpoint: fullApiServerUrl,
+        version: orezAppVersion,
         location: location.name,
         name: location.hub.name,
         bookings: state.bookings,
         nextBooking: helperFindNextBooking(state.bookings),
-    ]
+    ])
 }
 
-List apiGetDevices() {
+Map apiGetDevices() {
     log.debug 'apiGetDevice'
 
     List resp = []
@@ -306,7 +325,7 @@ List apiGetDevices() {
         resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label]
     }
 
-    return resp
+    return orezHttpResponseJson(resp)
 }
 
 Map apiGetDevice() {
@@ -352,7 +371,7 @@ Map apiGetDevice() {
         capabilities: lock.capabilities.collect { cap -> cap.name },
     ]
 
-    return resp
+    return orezHttpResponseJson(resp)
 }
 
 def apiExecuteCommand() {
@@ -367,6 +386,7 @@ def apiExecuteCommand() {
 
     def command = params.command
     def cmd = lock.supportedCommands.find { cmd -> cmd.name == command }
+
     if (!cmd) {
         return [ error: 'Command not found' ]
     }
@@ -403,19 +423,19 @@ Map apiSync() {
     scheduleEvents(state.bookings)
     reconcileDoorCodes(state.bookings)
 
-    return [
+    return orezHttpResponseJson([
         bookings: state.bookings,
         nextBooking: helperFindNextBooking(state.bookings, false),
-    ]
+    ])
 }
 
 Map apiSyncBooking() {
     log.debug "apiSync ${request.method} ${param.bookingId} ${request.JSON}"
 
-    return [
+    return orezHttpResponseJson([
         bookings: state.bookings,
         nextBooking: helperFindNextBooking(state.bookings),
-    ]
+    ])
 }
 
 // Help functions
@@ -423,6 +443,7 @@ Map apiSyncBooking() {
 // Format booking, and only return future bookings
 Map helperGetBookings(Map bookings) {
     log.debug 'helperGetBookings'
+
     Date now = new Date()
 
     return bookings.collect { key, booking ->
@@ -441,7 +462,7 @@ Map helperGetBookings(Map bookings) {
 }
 
 Map helperFindNextBooking(Map bookings, boolean format = true) {
-    log.debug "helperFindNextBooking"
+    log.debug 'helperFindNextBooking'
 
     Map _bookings = format ? helperGetBookings(bookings) : bookings
 
@@ -459,7 +480,8 @@ Map helperFindNextBooking(Map bookings, boolean format = true) {
 }
 
 Map helperOnlyOrezCodes(Map codes) {
-    log.debug "helperOnlyOrezCodes"
+    log.debug 'helperOnlyOrezCodes'
+    
     return codes
         .findAll { key, code -> code.name.startsWith('ORB') }
         .collectEntries { key, code ->
