@@ -431,12 +431,18 @@ Map apiSync() {
 }
 
 Map apiSyncBooking() {
-    log.debug "apiSync ${request.method} ${param.bookingId} ${request.JSON}"
+    log.debug "apiSync ${request.method} ${params.bookingId} ${request.JSON}"
 
-    return orezHttpResponseJson([
-        bookings: state.bookings,
-        nextBooking: helperFindNextBooking(state.bookings),
-    ])
+    state.bookings[params.bookingId] = request.JSON
+    state.bookings = helperGetBookings(state.bookings)
+    scheduleEvents(state.bookings)
+    reconcileDoorCodes(state.bookings)
+
+    if (state.bookings[params.bookingId] == null) {
+        return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
+    }
+
+    return orezHttpResponseJson(state.bookings[params.bookingId])
 }
 
 // Help functions
