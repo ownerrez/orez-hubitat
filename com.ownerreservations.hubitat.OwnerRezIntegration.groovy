@@ -1,40 +1,48 @@
-import groovy.json.JsonOutput
-
+// Groovy scripts do not have constants, so we use functions instead
+// Functions that start with get can be referenced as variables,
+// i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.dev.ownerreservations.com' }
 String getOrezBaseFastUrl() { 'http://fast.dev.ownerreservations.com' }
 String getOrezAppVersion() { '1.0.0-alpha' } // major.minor.patch[-prerelease] 
 
+import groovy.json.JsonOutput
+
+// Define the app
 definition(
     name: 'OwnerRez Integration',
     namespace: 'com.ownerreservations.hubitat',
     author: 'OwnerRez, Inc',
     description: 'OwnerRez Hubitat Integration',
-    category: 'Convenience',
-    oauth: true,
-    iconUrl: '',
-    iconX2Url: '',
+    category: 'Convenience', // Unused
+    oauth: true, // Unused
+    iconUrl: '', // Unused
+    iconX2Url: '', // Unused
     singleInstance: true,
 )
 
+// Define the App's preferences (i.e. the settings UI)
 preferences {
     page(name: 'main', install: true, uninstall: true) {
         section() {
             paragraph '<img alt="OwnerRez Logo" src="https://cdn.orez.io/wc/images/logo-new-green.png">'
             paragraph 'OwnerRez Hubitat Integration'
         }
-        
+
+        // We can only access the locks the user has selected
         section(title: '<h2>Configuration</h2>') {
             input(name: 'locks', type: 'capability.lockCodes', title: 'Locks', submitOnChange: true, multiple: true)
         }
 
         section(title: 'Connection') {
-            if (settings) {
+            if (settings) { // Prevents this code from executing during app install, as it will error
                 if (!settings.locks || settings.locks.length == 0) {
                     paragraph 'Please configure the locks before connecting to OwnerRez.'
                 }
+                // The app's installed()/updated() hooks do not get called unless the user actually clicks done
                 else if (!state.accessToken) {
                     paragraph 'Please click "Done" to complete setup before connecting to OwnerRez.'
                 }
+                // Set during the /settings/locks/hubitatConnect process via an API call
                 else if (!state.orezId) {
                     paragraph 'You are not connected to OwnerRez.'
                     href(title: 'Connect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
@@ -56,7 +64,78 @@ preferences {
     page(name: 'debug', title: 'Debug')
 }
 
+// Debug page for testing
+def debug() {
+    dynamicPage(name: 'debug', title: 'Debug') {
+        section {
+            input(name: 'btbAccessToken', type: 'button', title: 'Refresh Access Token')
+            input(name: 'btnTest', type: 'button', title: 'Test Webhook')
+            input(name: 'btnReconcile', type: 'button', title: 'Reconcile Door Codes')
+        }
+        // Direct links to API endpoints
+        section(title: 'Links') {
+            String url
+
+            // Hub info
+            url = fullApiServerUrl + "/info?access_token=${state.accessToken}"
+            href(title: url, style: 'external', url: url)
+
+            // Device List
+            url = fullApiServerUrl + "/devices?access_token=${state.accessToken}"
+            href(title: url, style: 'external', url: url)
+
+            // Device detail links
+            locks.each { lock ->
+                url = fullApiServerUrl + "/devices/${lock.id}?access_token=${state.accessToken}"
+                href(title: url, style: 'external', url: url)
+            }
+        }
+    }
+}
+
+// We only get one button handler function, so we have to switch on the button name
+void appButtonHandler(String btnName) {
+    log.debug "appButtonHandler: $btnName"
+
+    switch (btnName) {
+        // Disconnect from OwnerRez
+        case 'btnDisconnect':
+            state.accessToken = null
+            state.orezId = null
+            unschedule()
+            unsubscribe()
+            break
+        // Create/refresh access token (this will break the connection until the user reconnects)
+        case 'btbAccessToken':
+            state.accessToken = createAccessToken()
+            break
+        // Manually run the reconcileDoorCodes function
+        case 'btnReconcile':
+            reconcileDoorCodes()
+            break
+        // Send a test webhook
+        case 'btnTest':
+            Map testEvent = [
+                name: 'test',
+                value: 'test',
+                displayName: 'Test Webhook',
+                deviceId: null,
+                descriptionText: null,
+                unit: null,
+                type: null,
+                data: null
+            ]
+
+            orezHttpPostJson('/hubitat', testEvent, { r ->
+                log.debug "Test Webhook: ${r.data}"
+            })
+            break
+    }
+}
+
+// Mappings define the API endpoints
 mappings {
+    // Set (or unset) the OwnerRez Id (ORLACT) state variable
     path('/register') {
         action: [
             POST: 'apiRegister',
@@ -64,36 +143,42 @@ mappings {
         ]
     }
 
+    // Hub and App info, including bookings
     path('/info') {
         action: [
             GET: 'apiGetInfo',
         ]
     }
 
+    // List of devices
     path('/devices') {
         action: [
             GET: 'apiGetDevices',
         ]
     }
 
+    // Detailed device info
     path('/devices/:deviceId') {
         action: [
             GET: 'apiGetDevice',
         ]
     }
 
+    // Execute a command on a device
     path('/devices/:deviceId/:command') {
         action: [
             POST: 'apiExecuteCommand',
         ]
     }
 
+    // Sync all bookings (replaces state.bookings)
     path('/sync') {
         action: [
             PUT: 'apiSync',
         ]
     }
 
+    // Sync a single booking
     path('/sync/:bookingId') {
         action: [
             POST: 'apiSyncBooking',
@@ -108,18 +193,29 @@ void installed() {
     log.debug 'installed'
 
     // Initialize default state
-    state.lastVersion = orezAppVersion
-    state.bookings = [:]
-    state.accessToken = createAccessToken()
-    state.orezId = null
-    
 
-    subscribeToEvents()
-    scheduleEvents(null)
+    // Future use for version checking / update process
+    state.lastVersion = orezAppVersion
+
+    // Stores current and future bookings
+    state.bookings = [:]
+
+    // The API Key
+    state.accessToken = createAccessToken()
+
+    // The OwnerRez Id (ORLACT)
+    state.orezId = null
+
+    // Unlikely any reason to call, but just in case, clear out any old hooks
+    unsubscribe()
+    unschedule()
 }
 
+// Called when the settings page is updated (and use clicks done)
 void updated() {
     log.debug 'updated'
+
+    // Make sure these defautls are set
 
     if (!state.bookings) {
         state.bookings = [:]
@@ -133,18 +229,26 @@ void updated() {
         state.lastVersion = orezAppVersion
     }
 
+    SyncState()
+}
+
+// Setup event subscriptions, and any scheduled tasks
+void SyncState()
+{
     Map bookings = helperGetBookings(state.bookings)
     SyncState(bookings)
 }
 
 void SyncState(Map bookings)
 {
+    // Only call if we've successfully connected to OwnerRez
     if (state.orezId) {
         subscribeToEvents()
         scheduleEvents(bookings)
     }
 }
 
+// Subscribe to events for all locks
 void subscribeToEvents() {
     log.debug 'subscribeToEvents'
 
@@ -161,6 +265,7 @@ void subscribeToEvents() {
     subscribe(locks, 'codeLength', codeLengthHandler)
 }
 
+// Setup scheduled tasks for all bookings
 void scheduleEvents(Map bookings) {
     log.debug 'scheduleEvents'
 
@@ -169,36 +274,118 @@ void scheduleEvents(Map bookings) {
 
     // Schedule tasks
     if (bookings) {
-        Map nextBooking = helperFindNextBooking(bookings, false)
+        // Iterate through all bookings for each lock
+        // There's an assumption there can only be one active booking per lock
+        Map nextBooking = helperFindNextBooking(bookings)
+
         if (nextBooking) {
             // Schedule reconcileDoorCodes for next booking
-            runOnce(nextBooking.checkIn, 'reconcileDoorCodes', [overwrite: false])
-            runOnce(nextBooking.checkOut, 'reconcileDoorCodes', [overwrite: false])
+            // This will add new codes and remove old codes
+            nextBooking.each { lockId, booking ->
+                log.debug "scheduleEvents: schedule reconcileDoorCodes for ${lockId} ${booking}"
+                runOnce(booking.checkIn, 'reconcileDoorCodes', [overwrite: false])
+                runOnce(booking.checkOut, 'reconcileDoorCodes', [overwrite: false])
+            }
         }
     }
+}
+
+// Reconcile door codes for all locks
+void reconcileDoorCodes() {
+    log.debug 'reconcileDoorCodes'
+
+    Map bookings = helperGetBookings(state.bookings)
+    reconcileDoorCodes(bookings)
 }
 
 void reconcileDoorCodes(Map bookings) {
     log.debug 'reconcileDoorCodes'
 
+    // We only care about bookings that should be active right now
+    Map currentBookings = helperFindCurrentBookings(bookings)
+
     // Iterate through all locks
     locks.each { lock ->
-        log.trace "reconcileDoorCodes: ${lock.name}"
-        // Get the lock's current codes
-        Map codes = parseJson(lock.currentValue('lockCodes'))
-        log.trace "reconcileDoorCodes: ${codes}"
-        Map currentCodes = helperOnlyOrezCodes(codes)
+        log.trace "reconcileDoorCodes: lock ${lock.name}"
+
+        // Get current bookings for the current lock
+        Map currentLockBookings = currentBookings.findAll { key, booking -> booking.lockId == lock.id }
+        log.trace "reconcileDoorCodes: current lock bookings ${currentLockBookings}"
+
+        // Get the lock's current codes, as we don't remove non-OwnerRez codes
+        Map lockCodes = parseJson(lock.currentValue('lockCodes'))
+        Map orezCodes = helperOnlyOrezCodes(lockCodes)
+        log.trace "reconcileDoorCodes: lock codes ${lockCodes}"
+        log.trace "reconcileDoorCodes: orez codes ${orezCodes}"
 
         // Remove all codes that are not in the current bookings
-        currentCodes.each { code ->
+        orezCodes.each { bookingId, lockCode ->
+            if (!currentLockBookings[bookingId]) {
+                int codePosition
+
+                // deleteCode has to be called with an integer
+                if (lockCode.key instanceof String) {
+                    codePosition = lockCode.key.toInteger()
+                } else {
+                    codePosition = lockCode.key
+                }
+
+                // Remove the code
+                lock.deleteCode(codePosition)
+            }
+        }
+
+        // Refresh lock codes as the state has potentially changed
+        lockCodes = parseJson(lock.currentValue('lockCodes'))
+        orezCodes = helperOnlyOrezCodes(lockCodes)
+        log.trace "reconcileDoorCodes: lock codes ${lockCodes}"
+        log.trace "reconcileDoorCodes: orez codes ${orezCodes}"
+
+        // Are there any active bookings
+        if (currentLockBookings) {
+
+            // Get all available code positions as each one has a static index
+            List availableCodePositions = helperFindCodePositions(lock, lockCodes)
+            int index = 0
+
+            currentLockBookings.each { bookingId, booking ->
+
+                // Is the booking missing from the list of codes
+                if (!orezCodes[bookingId]) {
+                    log.debug "reconcileDoorCodes: setCode ${booking}"
+
+                    // Get the next available code position
+                    int codePosition = availableCodePositions[index++]
+
+                    // Create the code
+                    lock.setCode(codePosition, booking.code, bookingId + '-' + booking.guest)
+                }
+                // Is the booking's code different from the current code 
+                else if (orezCodes[bookingId].code != booking.code) {
+                    int codePosition
+
+                    // setCode has to be called with an integer
+                    if (orezCodes[bookingId].key instanceof String) {
+                        codePosition = orezCodes[bookingId].key.toInteger()
+                    } else {
+                        codePosition = orezCodes[bookingId].key
+                    }
+
+                    // Re-set the code
+                    log.debug "reconcileDoorCodes: re-running setCode ${codePosition} ${booking}"
+                    lock.setCode(codePosition, booking.code, bookingId + '-' + booking.guest)
+                }
+            }
         }
     }
-
 }
 
+// Send outbound webhook
 void webhook(e) {
     log.debug "webhook: ${e.name}"
 
+    // Don't if we don't have an OwnerRez Id
+    // Authentication would fail anyway
     if (!state.orezId) {
         log.debug "webhook: No OwnerRez ID"
         return
@@ -225,6 +412,7 @@ void webhook(e) {
     })
 }
 
+// Separate handler for each event for future flexibility
 void lockHandler(e) {
     webhook(e)
 }
@@ -249,6 +437,9 @@ void codeLengthHandler(e) {
     webhook(e)
 }
 
+// Get the Connect to OwnerRez URL
+// This endpoint will create/update the LinkedAccount for this hub,
+// And will reach back out to the hub's /register endpoint to set the OwnerRez Id (ORLACT) state variable
 String getOrezConnectUrl() {
     String connectUrl = orezBaseSecureUrl + '/settings/locks/HubitatConnect'
 
@@ -264,67 +455,20 @@ String getOrezConnectUrl() {
     return connectUrl
 }
 
-void appButtonHandler(String btnName) {
-    log.debug "appButtonHandler: $btnName"
-
-    switch (btnName) {
-        case 'btbAccessToken':
-            state.accessToken = createAccessToken()
-            break
-        case 'btnTest':
-            Map testEvent = [
-                name: 'test',
-                value: 'test',
-                displayName: 'Test Webhook',
-                deviceId: null,
-                descriptionText: null,
-                unit: null,
-                type: null,
-                data: null
-            ]
-
-            orezHttpPostJson('/hubitat', testEvent, { r ->
-                log.debug "Test Webhook: ${r.data}"
-            })
-            break
-        case 'btnDisconnect':
-            state.accessToken = null
-            state.orezId = null
-            unschedule()
-            unsubscribe()
-            break
-    }
-}
-
-def debug() {
-    dynamicPage(name: 'debug', title: 'Debug') {
-        section {
-            paragraph "helperFindNextBooking: ${helperFindNextBooking(state.bookings)}"
-        }
-        section {
-            input(name: 'btbAccessToken', type: 'button', title: 'Create Access Token')
-            input(name: 'btnTest', type: 'button', title: 'Test Webhook')
-        }
-        section(title: 'Links') {
-            locks.each { lock ->
-                String url = fullApiServerUrl + "/devices/${lock.id}?access_token=${state.accessToken}"
-                href(title: url, style: 'external', url: url)
-            }
-        }
-    }
-}
-
+// Send API request to OwnerRez's FastApi application
 void orezHttpPostJson(String uri, Map body, Closure closure) {
     log.debug "orezHttpPostJson: $uri, $body"
     log.debug "orezBaseFastUrl: $orezBaseFastUrl"
 
     Map params = [
-        uri: orezBaseFastUrl,
-        path: uri,
+        uri: orezBaseFastUrl, // Base URL
+        path: uri, // Uri appended to base URL
         contentType: 'application/json',
         body: body,
         headers: [
             'X-Forwarded-Proto': 'https', // TODO: remove for release
+            // Headers used for matching to the correct LinkedAccount,
+            // And for authentication
             'X-Hubitat-Orez-Id': state.orezId,
             'X-Hubitat-Hub-Id': hubUID,
             'X-Hubitat-App-Id': app.id,
@@ -333,9 +477,13 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
         ]
     ]
 
+    // Do the request. The closure will be called when the request completes
+    // Hubitat appears to do this synchronously, so we don't have to worry about concurrency
     httpPostJson(params, closure)
 }
 
+// Create a response for the API request
+// Done to include custom headers/response codes
 Map orezHttpResponseJson(def data, int status = 200) {
     return [
         renderMethod: true,
@@ -348,25 +496,37 @@ Map orezHttpResponseJson(def data, int status = 200) {
     ]
 }
 
+// Register the OwnerRez account with this hub
+// OwnerRez needs to already have the hub's Id and Access Token
+// So just accept whatever is passed in at face value
 Map apiRegister() {
     log.debug "apiRegister: ${request.JSON}"
 
     state.orezId = request.JSON.orezId
+
+    // Now that we have the OwnerRez Id, we can setup the webhook subscriptions
+    // And schedule the reconcileDoorCodes tasks
     Map bookings = helperGetBookings(state.bookings)
     SyncState(bookings)
 
     return apiGetInfo()
 }
 
+// Disassociate the OwnerRez account from this hub
 void apiUnregister() {
     log.debug 'apiUnregister'
 
     state.orezId = null
+
+    // This will break the connection until the user reconnects
     state.accessToken = null
+
+    // Unsubscribe from events and unschedule tasks
     unschedule()
     unsubscribe()
 }
 
+ // Get basic hub info, including bookings
 Map apiGetInfo() {
     log.debug 'apiGetInfo'
 
@@ -379,10 +539,11 @@ Map apiGetInfo() {
         location: location.name,
         name: location.hub.name,
         bookings: state.bookings,
-        nextBooking: helperFindNextBooking(state.bookings),
+        nextBooking: helperFindNextBooking(null),
     ])
 }
 
+// Get simplified list of devices
 Map apiGetDevices() {
     log.debug 'apiGetDevice'
 
@@ -395,6 +556,7 @@ Map apiGetDevices() {
     return orezHttpResponseJson(resp)
 }
 
+// Get detailed per-device info
 Map apiGetDevice() {
     log.debug "apiGetDevice: $params"
 
@@ -411,6 +573,7 @@ Map apiGetDevice() {
         type: lock.typeName,
         label: lock.label,
         displayName: lock.displayName,
+        // Simplify the attibutes as the data structure is too complex/verbose
         attributes: lock.supportedAttributes.collect { attr ->
         [
             name: attr.name,
@@ -426,6 +589,7 @@ Map apiGetDevice() {
 
             return attr
         },
+        // Simplify the commands as the data structure is too complex/verbose
         commands: lock.supportedCommands.collect { cmd -> [
             name: cmd.name,
             arguments: cmd.arguments,
@@ -435,12 +599,15 @@ Map apiGetDevice() {
                 description: param.description,
             ]},
         ]},
+        // Just need the capabilities names
         capabilities: lock.capabilities.collect { cap -> cap.name },
     ]
 
     return orezHttpResponseJson(resp)
 }
 
+// Execute a command on a device
+// Only allows a subset of commands
 def apiExecuteCommand() {
     log.debug "apiExecuteCommand: $params ${request.JSON}"
 
@@ -458,6 +625,7 @@ def apiExecuteCommand() {
         return orezHttpResponseJson([ error: 'Command not found' ], 404)
     }
 
+    // Even if just an empty object, gotta pass in something
     if (request.JSON == null) {
         return orezHttpResponseJson([ error: 'No JSON body' ], 400)
     }
@@ -483,6 +651,7 @@ def apiExecuteCommand() {
     }
 }
 
+// Sync all bookings (replaces state.bookings), schedule tasks, and reconcile door codes
 Map apiSync() {
     log.debug "apiSync ${request.JSON}"
 
@@ -492,10 +661,11 @@ Map apiSync() {
 
     return orezHttpResponseJson([
         bookings: state.bookings,
-        nextBooking: helperFindNextBooking(state.bookings, false),
+        nextBooking: helperFindNextBooking(state.bookings),
     ])
 }
 
+// Sync a single booking, schedule tasks, and reconcile door codes
 Map apiSyncBooking() {
     log.debug "apiSync ${params.bookingId}"
 
@@ -504,6 +674,7 @@ Map apiSyncBooking() {
     scheduleEvents(state.bookings)
     reconcileDoorCodes(state.bookings)
 
+    // If you try to save a booking that's already passed, it will be removed by helperGetBookings
     if (state.bookings[params.bookingId] == null) {
         return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
     }
@@ -511,6 +682,7 @@ Map apiSyncBooking() {
     return orezHttpResponseJson(state.bookings[params.bookingId])
 }
 
+// Delete a single booking, schedule tasks, and reconcile door codes
 void apiDeleteBooking() {
     log.debug "apiSync ${params.bookingId}"
 
@@ -525,7 +697,7 @@ void apiDeleteBooking() {
 
 // Help functions
 
-// Format booking, and only return future bookings
+// Format booking (ensure keyed by id, dates are objects), and only return future bookings
 Map helperGetBookings(Map bookings) {
     log.debug 'helperGetBookings'
 
@@ -548,24 +720,43 @@ Map helperGetBookings(Map bookings) {
     }
 }
 
-Map helperFindNextBooking(Map bookings, boolean format = true) {
+// For each lock, find the next/current booking
+Map helperFindNextBooking(Map bookings) {
     log.debug 'helperFindNextBooking'
 
-    Map _bookings = format ? helperGetBookings(bookings) : bookings
+    if (!bookings) {
+        bookings = helperGetBookings(state.bookings)
+    }
 
-    return _bookings.inject(null) { nextBooking, key, booking ->
-        if (nextBooking == null) {
-            return booking
+    // Aggregate next bookings by lockId
+    return bookings.inject([:]) { byLock, key, booking ->
+        if (byLock[booking.lockId] == null) {
+            byLock[booking.lockId] = booking
+        } else if (booking.checkIn < byLock[booking.lockId].checkIn) {
+            byLock[booking.lockId] = booking
         }
 
-        if (booking.checkIn < nextBooking.checkIn) {
-            return booking
-        }
-
-        return nextBooking
+        return byLock
     }
 }
 
+// Find all bookings that are currently active
+Map helperFindCurrentBookings(Map bookings) {
+    log.debug 'helperFindCurrentBooking'
+
+    Date now = new Date()
+
+    return bookings.findAll { id, booking ->
+        if (booking.checkIn <= now && booking.checkOut >= now) {
+            log.trace "helperFindCurrentBooking ${booking}"
+            return true
+        }
+
+        return false
+    }
+}
+
+// Get only the OwnerRez codes based on code name beginning with the booking Id
 Map helperOnlyOrezCodes(Map codes) {
     log.debug 'helperOnlyOrezCodes'
 
@@ -576,6 +767,26 @@ Map helperOnlyOrezCodes(Map codes) {
             String[] parts = code.name.split('-')
             code.key = key
             code.bookingId = parts[0]
-            return [ key, code ]
+            return [ parts[0], code ]
         }
 }
+
+// Find all unused code positions
+List helperFindCodePositions(def lock, Map codes) {
+    log.debug 'helperFindCodePositions'
+
+    List positions = []
+
+    for (int i = 1; i <= lock.currentValue('maxCodes'); i++) {
+        // The map key is a string, so we have to check for both just to be safe
+        if (!codes[i] && !codes["${i}"]) {
+            positions << i
+        }
+    }
+
+    log.trace "helperFindCodePositions ${positions}"
+
+    return positions
+}
+
+// EOF
