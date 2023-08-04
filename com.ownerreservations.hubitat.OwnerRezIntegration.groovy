@@ -17,23 +17,35 @@ definition(
 )
 
 preferences {
-    page(name: 'main', title: 'Setup', install: true, uninstall: true) {
-        section(title: 'Setup') {
+    page(name: 'main', install: true, uninstall: true) {
+        section() {
+            paragraph '<img alt="OwnerRez Logo" src="https://cdn.orez.io/wc/images/logo-new-green.png">'
+            paragraph 'OwnerRez Hubitat Integration'
+        }
+        
+        section(title: '<h2>Configuration</h2>') {
             input(name: 'locks', type: 'capability.lockCodes', title: 'Locks', submitOnChange: true, multiple: true)
         }
 
         section(title: 'Connection') {
-            if (state.accessToken) {
+            if (settings) {
                 if (!settings.locks || settings.locks.length == 0) {
                     paragraph 'Please configure the locks before connecting to OwnerRez.'
                 }
                 else if (!state.accessToken) {
                     paragraph 'Please click "Done" to complete setup before connecting to OwnerRez.'
                 }
-                else {
-                    paragraph 'Endpoint: ' + getFullApiServerUrl()
-                    paragraph 'Access Token: ' + state.accessToken
+                else if (!state.orezId) {
+                    paragraph 'You are not connected to OwnerRez.'
                     href(title: 'Connect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
+                }
+                else {
+                    paragraph 'You are connected to OwnerRez.'
+                    paragraph 'OwnerRez Id: ' + state.orezId
+                    paragraph 'Endpoint: ' + fullApiServerUrl
+                    paragraph 'Access Token: ' + state.accessToken
+                    href(title: 'Reconnect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
+                    input(name: 'btnDisconnect', type: 'button', title: 'Disconnect from OwnerRez')
                 }
             }
         }
@@ -44,33 +56,40 @@ preferences {
 }
 
 mappings {
+    path('/register') {
+        action: [
+            POST: 'apiRegister',
+            DELETE: 'apiUnregister',
+        ]
+    }
+
     path('/info') {
         action: [
-            GET: 'apiGetInfo'
+            GET: 'apiGetInfo',
         ]
     }
 
     path('/devices') {
         action: [
-            GET: 'apiGetDevices'
+            GET: 'apiGetDevices',
         ]
     }
 
     path('/devices/:deviceId') {
         action: [
-            GET: 'apiGetDevice'
+            GET: 'apiGetDevice',
         ]
     }
 
     path('/devices/:deviceId/:command') {
         action: [
-            POST: 'apiExecuteCommand'
+            POST: 'apiExecuteCommand',
         ]
     }
 
     path('/sync') {
         action: [
-            PUT: 'apiSync'
+            PUT: 'apiSync',
         ]
     }
 
@@ -78,7 +97,7 @@ mappings {
         action: [
             POST: 'apiSyncBooking',
             PUT: 'apiSyncBooking',
-            DELETE: 'apiSyncBooking',
+            DELETE: 'apiDeleteBooking',
         ]
     }
 }
@@ -90,6 +109,7 @@ void installed() {
     // Initialize bookings map
     state.bookings = [:]
     state.accessToken = createAccessToken()
+    state.orezId = null
 
     subscribeToEvents()
     scheduleEvents(null)
@@ -107,9 +127,15 @@ void updated() {
     }
 
     Map bookings = helperGetBookings(state.bookings)
+    SyncState(bookings)
+}
 
-    subscribeToEvents()
-    scheduleEvents(bookings)
+void SyncState(Map bookings)
+{
+    if (state.orezId) {
+        subscribeToEvents()
+        scheduleEvents(bookings)
+    }
 }
 
 void subscribeToEvents() {
@@ -165,6 +191,11 @@ void reconcileDoorCodes(Map bookings) {
 
 void webhook(e) {
     log.debug "webhook: ${e.name}"
+
+    if (!state.orezId) {
+        log.debug "webhook: No OwnerRez ID"
+        return
+    }
 
     // Normalize the event payload
     Map payload = [
@@ -232,7 +263,7 @@ void appButtonHandler(String btnName) {
     switch (btnName) {
         case 'btbAccessToken':
             state.accessToken = createAccessToken()
-        break
+            break
         case 'btnTest':
             Map testEvent = [
                 name: 'test',
@@ -248,7 +279,13 @@ void appButtonHandler(String btnName) {
             orezHttpPostJson('/webhook/hubitat', testEvent, { r ->
                 log.debug "Test Webhook: ${r.data}"
             })
-        break
+            break
+        case 'btnDisconnect':
+            state.accessToken = null
+            state.orezId = null
+            unschedule()
+            unsubscribe()
+            break
     }
 }
 
@@ -280,6 +317,7 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
         contentType: 'application/json',
         body: body,
         headers: [
+            'X-Hubitat-Orez-Id': state.orezId,
             'X-Hubitat-Hub-Id': hubUID,
             'X-Hubitat-App-Id': app.id,
             'X-Hubitat-Access-Token': state.accessToken,
@@ -302,10 +340,30 @@ Map orezHttpResponseJson(def data, int status = 200) {
     ]
 }
 
+Map apiRegister() {
+    log.debug "apiRegister: ${request.JSON}"
+
+    state.orezId = request.JSON.orezId
+    Map bookings = helperGetBookings(state.bookings)
+    SyncState(bookings)
+
+    return apiGetInfo()
+}
+
+void apiUnregister() {
+    log.debug 'apiUnregister'
+
+    state.orezId = null
+    state.accessToken = null
+    unschedule()
+    unsubscribe()
+}
+
 Map apiGetInfo() {
     log.debug 'apiGetInfo'
 
     return orezHttpResponseJson([
+        orezId: state.orezId,
         hubId: hubUID,
         appId: app.id,
         endpoint: fullApiServerUrl,
@@ -431,7 +489,7 @@ Map apiSync() {
 }
 
 Map apiSyncBooking() {
-    log.debug "apiSync ${request.method} ${params.bookingId} ${request.JSON}"
+    log.debug "apiSync ${params.bookingId}"
 
     state.bookings[params.bookingId] = request.JSON
     state.bookings = helperGetBookings(state.bookings)
@@ -445,6 +503,18 @@ Map apiSyncBooking() {
     return orezHttpResponseJson(state.bookings[params.bookingId])
 }
 
+void apiDeleteBooking() {
+    log.debug "apiSync ${params.bookingId}"
+
+    Map bookings = state.bookings.findAll { key, booking ->
+        return key != params.bookingId && booking.id != params.bookingId
+    }
+
+    state.bookings = helperGetBookings(bookings)
+    scheduleEvents(bookings)
+    reconcileDoorCodes(bookings)
+}
+
 // Help functions
 
 // Format booking, and only return future bookings
@@ -455,8 +525,10 @@ Map helperGetBookings(Map bookings) {
 
     return bookings.collect { key, booking ->
         log.trace "helperGetBookings state.bookings.collect ${key} ${booking}"
-        booking.checkIn = toDateTime(booking.checkIn)
-        booking.checkOut = toDateTime(booking.checkOut)
+        if (booking.checkIn instanceof String)
+            booking.checkIn = toDateTime(booking.checkIn)
+        if (booking.checkOut instanceof String)
+            booking.checkOut = toDateTime(booking.checkOut)
         return booking
     }
     .findAll { booking ->
