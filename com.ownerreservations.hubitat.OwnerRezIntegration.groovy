@@ -1,7 +1,7 @@
 import groovy.json.JsonOutput
 
 String getOrezBaseSecureUrl() { 'https://secure.dev.ownerreservations.com' }
-String getOrezBaseFastUrl() { 'https://jignate.ddns.net/log' }
+String getOrezBaseFastUrl() { 'http://fast.dev.ownerreservations.com' }
 String getOrezAppVersion() { '1.0.0-alpha' } // major.minor.patch[-prerelease] 
 
 definition(
@@ -44,6 +44,7 @@ preferences {
                     paragraph 'OwnerRez Id: ' + state.orezId
                     paragraph 'Endpoint: ' + fullApiServerUrl
                     paragraph 'Access Token: ' + state.accessToken
+                    paragraph 'App Version: ' + orezAppVersion
                     href(title: 'Reconnect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
                     input(name: 'btnDisconnect', type: 'button', title: 'Disconnect from OwnerRez')
                 }
@@ -106,10 +107,12 @@ mappings {
 void installed() {
     log.debug 'installed'
 
-    // Initialize bookings map
+    // Initialize default state
+    state.lastVersion = orezAppVersion
     state.bookings = [:]
     state.accessToken = createAccessToken()
     state.orezId = null
+    
 
     subscribeToEvents()
     scheduleEvents(null)
@@ -124,6 +127,10 @@ void updated() {
 
     if (!state.accessToken) {
         state.accessToken = createAccessToken()
+    }
+
+    if (state.lastVersion != orezAppVersion) {
+        state.lastVersion = orezAppVersion
     }
 
     Map bookings = helperGetBookings(state.bookings)
@@ -213,7 +220,7 @@ void webhook(e) {
         unit: e.unit,
     ]
 
-    orezHttpPostJson('/webhook/hubitat', payload, { r ->
+    orezHttpPostJson('/hubitat', payload, { r ->
         log.debug "Webhook: ${r.data}"
     })
 }
@@ -276,7 +283,7 @@ void appButtonHandler(String btnName) {
                 data: null
             ]
 
-            orezHttpPostJson('/webhook/hubitat', testEvent, { r ->
+            orezHttpPostJson('/hubitat', testEvent, { r ->
                 log.debug "Test Webhook: ${r.data}"
             })
             break
@@ -317,6 +324,7 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
         contentType: 'application/json',
         body: body,
         headers: [
+            'X-Forwarded-Proto': 'https', // TODO: remove for release
             'X-Hubitat-Orez-Id': state.orezId,
             'X-Hubitat-Hub-Id': hubUID,
             'X-Hubitat-App-Id': app.id,
