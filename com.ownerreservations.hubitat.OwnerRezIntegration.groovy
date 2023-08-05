@@ -56,6 +56,8 @@ preferences {
                     href(title: 'Reconnect to OwnerRez', description: 'Click here to connect to OwnerRez', style: 'external', url: orezConnectUrl)
                     input(name: 'btnDisconnect', type: 'button', title: 'Disconnect from OwnerRez')
                 }
+            } else {
+                paragraph 'Please configure the locks before connecting to OwnerRez.'
             }
         }
     }
