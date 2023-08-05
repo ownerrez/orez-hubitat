@@ -175,6 +175,7 @@ mappings {
     path('/sync') {
         action: [
             PUT: 'apiSync',
+            PATCH: 'apiSyncPatch',
         ]
     }
 
@@ -656,6 +657,19 @@ Map apiSync() {
     log.debug "apiSync ${request.JSON}"
 
     state.bookings = helperGetBookings(request.JSON)
+    scheduleEvents(state.bookings)
+    reconcileDoorCodes(state.bookings)
+
+    return orezHttpResponseJson([
+        bookings: state.bookings,
+        nextBooking: helperFindNextBooking(state.bookings),
+    ])
+}
+
+Map apiSyncPatch() {
+    log.debug "apiSyncPatch ${request.JSON}"
+
+    state.bookings = helperGetBookings(state.bookings + request.JSON)
     scheduleEvents(state.bookings)
     reconcileDoorCodes(state.bookings)
 
