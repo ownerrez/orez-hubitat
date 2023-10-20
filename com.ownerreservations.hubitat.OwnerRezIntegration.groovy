@@ -282,11 +282,17 @@ void scheduleEvents(Map bookings) {
         Map nextBooking = helperFindNextBooking(bookings)
 
         if (nextBooking) {
+            Date now = new Date()
+            
             // Schedule reconcileDoorCodes for next booking
             // This will add new codes and remove old codes
             nextBooking.each { lockId, booking ->
                 log.debug "scheduleEvents: schedule reconcileDoorCodes for ${lockId} ${booking}"
-                runOnce(booking.checkIn, 'reconcileDoorCodes', [overwrite: false])
+
+                // Only schedule check-in if its in the future
+                if (booking.checkIn > now)
+                    runOnce(booking.checkIn, 'reconcileDoorCodes', [overwrite: false])
+                
                 runOnce(booking.checkOut, 'reconcileDoorCodes', [overwrite: false])
             }
         }
@@ -352,6 +358,10 @@ void reconcileDoorCodes(Map bookings) {
             int index = 0
 
             currentLockBookings.each { bookingId, booking ->
+                String codeName = bookingId
+
+                if (booking.guest)
+                    codeName += '-' + booking.guest
 
                 // Is the booking missing from the list of codes
                 if (!orezCodes[bookingId]) {
@@ -361,7 +371,7 @@ void reconcileDoorCodes(Map bookings) {
                     int codePosition = availableCodePositions[index++]
 
                     // Create the code
-                    lock.setCode(codePosition, booking.code, bookingId + '-' + booking.guest)
+                    lock.setCode(codePosition, booking.code, codeName)
                 }
                 // Is the booking's code different from the current code 
                 else if (orezCodes[bookingId].code != booking.code) {
@@ -376,7 +386,7 @@ void reconcileDoorCodes(Map bookings) {
 
                     // Re-set the code
                     log.debug "reconcileDoorCodes: re-running setCode ${codePosition} ${booking}"
-                    lock.setCode(codePosition, booking.code, bookingId + '-' + booking.guest)
+                    lock.setCode(codePosition, booking.code, codeName)
                 }
             }
         }
