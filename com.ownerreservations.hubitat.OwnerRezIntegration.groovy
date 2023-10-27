@@ -2,7 +2,7 @@
 // Functions that start with get can be referenced as variables,
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
-String getOrezBaseFastUrl() { 'http://fast.ownerreservations.com' }
+String getOrezBaseFastUrl() { 'https://fast.ownerreservations.com' }
 String getOrezAppVersion() { '1.0.0-rc3' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
