@@ -1,9 +1,9 @@
 // Groovy scripts do not have constants, so we use functions instead
 // Functions that start with get can be referenced as variables,
 // i.e. "getFunctionName" can be referenced as "functionName"
-String getOrezBaseSecureUrl() { 'https://secure.dev.ownerreservations.com' }
-String getOrezBaseFastUrl() { 'http://fast.dev.ownerreservations.com' }
-String getOrezAppVersion() { '1.0.0-alpha' } // major.minor.patch[-prerelease] 
+String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
+String getOrezBaseFastUrl() { 'http://fast.ownerreservations.com' }
+String getOrezAppVersion() { '1.0.0-rc3' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -479,7 +479,6 @@ void orezHttpPostJson(String uri, Map body, Closure closure) {
         contentType: 'application/json',
         body: body,
         headers: [
-            'X-Forwarded-Proto': 'https', // TODO: remove for release
             // Headers used for matching to the correct LinkedAccount,
             // And for authentication
             'X-Hubitat-Orez-Id': state.orezId,
