@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerreservations.com' }
-String getOrezAppVersion() { '1.0.0-rc3' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.0.0-rc4' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -249,6 +249,10 @@ void SyncState(Map bookings)
         subscribeToEvents()
         scheduleEvents(bookings)
     }
+    else {
+        unsubscribe()
+        unschedule()
+    }
 }
 
 // Subscribe to events for all locks
@@ -301,7 +305,7 @@ void scheduleEvents(Map bookings) {
 
 // Reconcile door codes for all locks
 void reconcileDoorCodes() {
-    log.debug 'reconcileDoorCodes'
+    log.debug 'reconcileDoorCodes (no args)'
 
     Map bookings = helperGetBookings(state.bookings)
     reconcileDoorCodes(bookings)
@@ -312,6 +316,8 @@ void reconcileDoorCodes(Map bookings) {
 
     // We only care about bookings that should be active right now
     Map currentBookings = helperFindCurrentBookings(bookings)
+
+    Boolean hasDeleted = false; 
 
     // Iterate through all locks
     locks.each { lock ->
@@ -339,16 +345,19 @@ void reconcileDoorCodes(Map bookings) {
                     codePosition = lockCode.key
                 }
 
+                log.trace "reconcileDoorCodes: deleteCode ${codePosition}"
+
                 // Remove the code
                 lock.deleteCode(codePosition)
+
+                hasDeleted = true;
             }
         }
 
-        // Refresh lock codes as the state has potentially changed
-        lockCodes = parseJson(lock.currentValue('lockCodes'))
-        orezCodes = helperOnlyOrezCodes(lockCodes)
-        log.trace "reconcileDoorCodes: lock codes ${lockCodes}"
-        log.trace "reconcileDoorCodes: orez codes ${orezCodes}"
+        // If we deleted a code, we need to let the locks update before adding new codes
+        if (hasDeleted) {
+            return
+        }
 
         // Are there any active bookings
         if (currentLockBookings) {
@@ -391,6 +400,15 @@ void reconcileDoorCodes(Map bookings) {
             }
         }
     }
+
+    if (hasDeleted) {
+        // State wont change mid-app execution, so we need to schedule another run of reconcileDoorCodes
+        log.trace "reconcileDoorCodes: waiting for lock to update"
+        runIn(60, 'reconcileDoorCodes', [ overwrite: true, misfire: 'ignore' ])
+    }
+    else {
+        scheduleEvents(bookings)
+    }
 }
 
 // Send outbound webhook
@@ -401,6 +419,8 @@ void webhook(e) {
     // Authentication would fail anyway
     if (!state.orezId) {
         log.debug "webhook: No OwnerRez ID"
+        unsubscribe()
+        unschedule()
         return
     }
 
