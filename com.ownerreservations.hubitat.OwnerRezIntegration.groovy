@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerreservations.com' }
-String getOrezAppVersion() { '1.0.0-rc4' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.0.0-rc5' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -18,6 +18,7 @@ definition(
     iconUrl: '', // Unused
     iconX2Url: '', // Unused
     singleInstance: true,
+    singleThreaded: true,
 )
 
 // Define the App's preferences (i.e. the settings UI)
@@ -281,6 +282,8 @@ void scheduleEvents(Map bookings) {
 
     // Schedule tasks
     if (bookings) {
+        schedule('0 0 0 * * ?', 'refreshDoorCodes') // Daily at midnight
+
         // Iterate through all bookings for each lock
         // There's an assumption there can only be one active booking per lock
         Map nextBooking = helperFindNextBooking(bookings)
@@ -300,6 +303,16 @@ void scheduleEvents(Map bookings) {
                 runOnce(booking.checkOut, 'reconcileDoorCodes', [overwrite: false])
             }
         }
+    }
+}
+
+// Call getCodes() on each lock to ensure Hubitat has the latest codes
+void refreshDoorCodes() {
+    locks.each { lock ->
+        log.trace "refreshDoorCodes: lock ${lock.name}"
+
+        // Varies by lock driver, but this can iterate through all code positions over z-wave/zigbee and can take a while
+        lock.getCodes()
     }
 }
 
@@ -328,7 +341,7 @@ void reconcileDoorCodes(Map bookings) {
         log.trace "reconcileDoorCodes: current lock bookings ${currentLockBookings}"
 
         // Get the lock's current codes, as we don't remove non-OwnerRez codes
-        Map lockCodes = parseJson(lock.currentValue('lockCodes'))
+        Map lockCodes = parseJson(lock.currentValue('lockCodes', true))
         Map orezCodes = helperOnlyOrezCodes(lockCodes)
         log.trace "reconcileDoorCodes: lock codes ${lockCodes}"
         log.trace "reconcileDoorCodes: orez codes ${orezCodes}"
@@ -395,6 +408,7 @@ void reconcileDoorCodes(Map bookings) {
 
                     // Re-set the code
                     log.debug "reconcileDoorCodes: re-running setCode ${codePosition} ${booking}"
+
                     lock.setCode(codePosition, booking.code, codeName)
                 }
             }
@@ -404,7 +418,7 @@ void reconcileDoorCodes(Map bookings) {
     if (hasDeleted) {
         // State wont change mid-app execution, so we need to schedule another run of reconcileDoorCodes
         log.trace "reconcileDoorCodes: waiting for lock to update"
-        runIn(60, 'reconcileDoorCodes', [ overwrite: true, misfire: 'ignore' ])
+        runIn(0, 'reconcileDoorCodes', [ overwrite: true, misfire: 'ignore' ])
     }
     else {
         scheduleEvents(bookings)
