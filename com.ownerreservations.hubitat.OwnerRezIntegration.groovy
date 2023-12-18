@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerreservations.com' }
-String getOrezAppVersion() { '1.0.0-rc5' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.0.0-rc6' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -249,6 +249,7 @@ void SyncState(Map bookings)
     if (state.orezId) {
         subscribeToEvents()
         scheduleEvents(bookings)
+        refreshDoorCodes()
     }
     else {
         unsubscribe()
@@ -279,6 +280,9 @@ void scheduleEvents(Map bookings) {
 
     // Remove old scheduled tasks
     unschedule()
+    
+    // Keep track of scheduled times as we add them to avoid simultaneous executions of reconcileDoorCodes
+    List schedules = []
 
     // Schedule tasks
     if (bookings) {
@@ -297,10 +301,17 @@ void scheduleEvents(Map bookings) {
                 log.debug "scheduleEvents: schedule reconcileDoorCodes for ${lockId} ${booking}"
 
                 // Only schedule check-in if its in the future
-                if (booking.checkIn > now)
-                    runOnce(booking.checkIn, 'reconcileDoorCodes', [overwrite: false])
+                if (booking.checkIn > now) {
+                    if (!schedules.contains(booking.checkIn)) {
+                        runOnce(booking.checkIn, 'reconcileDoorCodes', [overwrite: false])
+                        schedules.add(booking.checkIn)
+                    }
+                }
                 
-                runOnce(booking.checkOut, 'reconcileDoorCodes', [overwrite: false])
+                if (!schedules.contains(booking.checkOut)) {
+                    runOnce(booking.checkOut, 'reconcileDoorCodes', [overwrite: false])
+                    schedules.add(booking.checkOut)
+                }
             }
         }
     }
@@ -308,6 +319,8 @@ void scheduleEvents(Map bookings) {
 
 // Call getCodes() on each lock to ensure Hubitat has the latest codes
 void refreshDoorCodes() {
+    log.debug 'refreshDoorCodes'
+
     locks.each { lock ->
         log.trace "refreshDoorCodes: lock ${lock.name}"
 
