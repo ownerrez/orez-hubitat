@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerreservations.com' }
-String getOrezAppVersion() { '1.0.0-rc6' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.0-rc1' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -74,6 +74,7 @@ def debug() {
             input(name: 'btbAccessToken', type: 'button', title: 'Refresh Access Token')
             input(name: 'btnTest', type: 'button', title: 'Test Webhook')
             input(name: 'btnReconcile', type: 'button', title: 'Reconcile Door Codes')
+            input(name: 'btnReset', type: 'button', title: 'Reset State')
         }
         // Direct links to API endpoints
         section(title: 'Links') {
@@ -115,6 +116,12 @@ void appButtonHandler(String btnName) {
         // Manually run the reconcileDoorCodes function
         case 'btnReconcile':
             reconcileDoorCodes()
+            break
+        case 'btnReset':
+            unsubscribe()
+            unschedule()
+            state.lastVersion = orezAppVersion
+            state.bookings = [:]
             break
         // Send a test webhook
         case 'btnTest':
@@ -182,12 +189,21 @@ mappings {
         ]
     }
 
-    // Sync a single booking
+    // Sync a single booking (Legacy)
     path('/sync/:bookingId') {
         action: [
             POST: 'apiSyncBooking',
             PUT: 'apiSyncBooking',
             DELETE: 'apiDeleteBooking',
+        ]
+    }
+
+    // Sync a single booking by lock
+    path('/sync/:bookingId/:lockId') {
+        action: [
+            POST: 'apiSyncBookingByLock',
+            PUT: 'apiSyncBookingByLock',
+            DELETE: 'apiDeleteBookingByLock',
         ]
     }
 }
@@ -240,6 +256,7 @@ void updated() {
 void SyncState()
 {
     Map bookings = helperGetBookings(state.bookings)
+    state.bookings = bookings
     SyncState(bookings)
 }
 
@@ -280,7 +297,7 @@ void scheduleEvents(Map bookings) {
 
     // Remove old scheduled tasks
     unschedule()
-    
+
     // Keep track of scheduled times as we add them to avoid simultaneous executions of reconcileDoorCodes
     List schedules = []
 
@@ -294,21 +311,20 @@ void scheduleEvents(Map bookings) {
 
         if (nextBooking) {
             Date now = new Date()
-            
+
             // Schedule reconcileDoorCodes for next booking
             // This will add new codes and remove old codes
             nextBooking.each { lockId, booking ->
-                log.debug "scheduleEvents: schedule reconcileDoorCodes for ${lockId} ${booking}"
 
                 // Only schedule check-in if its in the future
                 if (booking.checkIn > now) {
                     if (!schedules.contains(booking.checkIn)) {
+                        log.debug "scheduleEvents: schedule reconcileDoorCodes for ${booking}"
                         runOnce(booking.checkIn, 'reconcileDoorCodes', [overwrite: false])
                         schedules.add(booking.checkIn)
                     }
-                }
-                
-                if (!schedules.contains(booking.checkOut)) {
+                } else if (!schedules.contains(booking.checkOut)) {
+                    log.debug "scheduleEvents: schedule reconcileDoorCodes for ${booking}"
                     runOnce(booking.checkOut, 'reconcileDoorCodes', [overwrite: false])
                     schedules.add(booking.checkOut)
                 }
@@ -343,14 +359,17 @@ void reconcileDoorCodes(Map bookings) {
     // We only care about bookings that should be active right now
     Map currentBookings = helperFindCurrentBookings(bookings)
 
-    Boolean hasDeleted = false; 
+    Boolean hasDeleted = false
 
     // Iterate through all locks
     locks.each { lock ->
         log.trace "reconcileDoorCodes: lock ${lock.name}"
 
         // Get current bookings for the current lock
-        Map currentLockBookings = currentBookings.findAll { key, booking -> booking.lockId == lock.id }
+        Map currentLockBookings = currentBookings
+            .findAll { key, booking -> booking.lockId.contains(lock.id) }
+            .collectEntries { key, booking -> [(booking.id): booking] }
+
         log.trace "reconcileDoorCodes: current lock bookings ${currentLockBookings}"
 
         // Get the lock's current codes, as we don't remove non-OwnerRez codes
@@ -376,7 +395,7 @@ void reconcileDoorCodes(Map bookings) {
                 // Remove the code
                 lock.deleteCode(codePosition)
 
-                hasDeleted = true;
+                hasDeleted = true
             }
         }
 
@@ -387,16 +406,12 @@ void reconcileDoorCodes(Map bookings) {
 
         // Are there any active bookings
         if (currentLockBookings) {
-
             // Get all available code positions as each one has a static index
             List availableCodePositions = helperFindCodePositions(lock, lockCodes)
             int index = 0
 
             currentLockBookings.each { bookingId, booking ->
-                String codeName = bookingId
-
-                if (booking.guest)
-                    codeName += '-' + booking.guest
+                String codeName = helperGetCodeName(booking)
 
                 // Is the booking missing from the list of codes
                 if (!orezCodes[bookingId]) {
@@ -739,27 +754,75 @@ Map apiSyncPatch() {
 
 // Sync a single booking, schedule tasks, and reconcile door codes
 Map apiSyncBooking() {
-    log.debug "apiSync ${params.bookingId}"
+    log.debug "apiSyncBooking ${params.bookingId}"
 
-    state.bookings[params.bookingId] = request.JSON
+    params.lockId = request.JSON.lockId
+
+    return apiSyncBookingByLock()
+}
+
+// Sync a single booking, by lockID, schedule tasks, and reconcile door codes
+Map apiSyncBookingByLock() {
+    log.debug "apiSyncBookingByLock ${params.bookingId} ${params.lockId}"
+
+    String key = params.bookingId
+    Map existing = state.bookings[key]
+    Map booking = request.JSON
+
+    // If the booking is already in the state, merge the lockId
+    if (existing) {
+        booking = existing + booking
+        if (existing.lockId instanceof List) {
+            booking.lockId = existing.lockId
+        } else {
+            booking.lockId = [existing.lockId]
+        }
+        booking.lockId << params.lockId
+    } else {
+        booking.lockId = [params.lockId]
+    }
+
+    booking.lockId = booking.lockId.unique()
+    state.bookings[key] = booking
     state.bookings = helperGetBookings(state.bookings)
     scheduleEvents(state.bookings)
     reconcileDoorCodes(state.bookings)
 
     // If you try to save a booking that's already passed, it will be removed by helperGetBookings
-    if (state.bookings[params.bookingId] == null) {
+    if (state.bookings[key] == null) {
         return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
     }
 
-    return orezHttpResponseJson(state.bookings[params.bookingId])
+    if (helperHasDuplicateCode(params.lockId, state.bookings[key])) {
+        return orezHttpResponseJson([ error: "Duplicate code: '${booking.code}'."], 409)
+    }
+
+    return orezHttpResponseJson(state.bookings[key])
 }
 
 // Delete a single booking, schedule tasks, and reconcile door codes
 void apiDeleteBooking() {
-    log.debug "apiSync ${params.bookingId}"
+    log.debug "apiDeleteBooking ${params.bookingId}"
 
-    Map bookings = state.bookings.findAll { key, booking ->
-        return key != params.bookingId && booking.id != params.bookingId
+    params.lockId = request.JSON.lockId
+
+    apiDeleteBookingByLock()
+}
+
+// Delete a single booking, schedule tasks, and reconcile door codes
+void apiDeleteBookingByLock() {
+    log.debug "apiDeleteBookingByLock ${params.bookingId} ${params.lockId}"
+
+    String key = params.bookingId
+
+    Map bookings = state.bookings.collectEntries { k, booking ->
+        if (k == key) {
+            booking.lockId = booking.lockId - params.lockId
+        }
+        return [ k, booking ]
+    }
+    .findAll { k, booking ->
+        return booking.lockId.size() > 0
     }
 
     state.bookings = helperGetBookings(bookings)
@@ -768,6 +831,14 @@ void apiDeleteBooking() {
 }
 
 // Help functions
+String helperGetCodeName(Map booking) {
+    String codeName = booking.id
+
+    if (booking.guest)
+        codeName += '-' + booking.guest
+
+    return codeName
+}
 
 // Format booking (ensure keyed by id, dates are objects), and only return future bookings
 Map helperGetBookings(Map bookings) {
@@ -786,9 +857,32 @@ Map helperGetBookings(Map bookings) {
     .findAll { booking ->
         return booking.checkIn >= now || booking.checkOut >= now
     }
-    .collectEntries { booking ->
-        log.trace "helperGetBookings state.bookings.collectEntries ${booking}"
-        return [ booking.id, booking ]
+    .groupBy { booking ->
+        log.trace "helperGetBookings state.bookings.groupBy ${booking}"
+        return booking.id
+    }
+    .collectEntries { k, group ->
+        log.trace "helperGetBookings state.bookings.collectEntries ${k} ${group}"
+        return [ k, group.inject(group[0] + [lockId: []]) { acc, v -> acc.lockId += v.lockId; acc } ]
+    }
+}
+
+// Check for duplicate code
+boolean helperHasDuplicateCode(String lockId, Map booking) {
+    log.debug "helperHasDuplicateCode ${lockId} ${booking.id} ${booking.code}"
+
+    def lock = locks.find { lock -> lock.id == lockId }
+
+    if (!lock) {
+        return false
+    }
+
+    Map lockCodes = parseJson(lock.currentValue('lockCodes', true))
+
+    String codeName = helperGetCodeName(booking)
+
+    return lockCodes.any { k, existing ->
+        return existing.name != codeName && existing.code == booking.code
     }
 }
 
@@ -802,10 +896,12 @@ Map helperFindNextBooking(Map bookings) {
 
     // Aggregate next bookings by lockId
     return bookings.inject([:]) { byLock, key, booking ->
-        if (byLock[booking.lockId] == null) {
-            byLock[booking.lockId] = booking
-        } else if (booking.checkIn < byLock[booking.lockId].checkIn) {
-            byLock[booking.lockId] = booking
+        booking.lockId.each { lockId ->
+            if (byLock[lockId] == null) {
+                byLock[lockId] = booking
+            } else if (booking.checkIn < byLock[lockId].checkIn) {
+                byLock[lockId] = booking
+            }
         }
 
         return byLock
