@@ -1,9 +1,9 @@
 // Groovy scripts do not have constants, so we use functions instead
 // Functions that start with get can be referenced as variables,
 // i.e. "getFunctionName" can be referenced as "functionName"
-String getOrezBaseSecureUrl() { 'https://secure.ownerreservations.com' }
-String getOrezBaseFastUrl() { 'https://fast.ownerreservations.com' }
-String getOrezAppVersion() { '1.1.0-rc1' } // major.minor.patch[-prerelease] 
+String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
+String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
+String getOrezAppVersion() { '1.1.1-rc2' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -363,7 +363,7 @@ void reconcileDoorCodes(Map bookings) {
 
     // Iterate through all locks
     locks.each { lock ->
-        log.trace "reconcileDoorCodes: lock ${lock.name}"
+        log.trace "reconcileDoorCodes: lock ${lock.id} ${lock.label}"
 
         // Get current bookings for the current lock
         Map currentLockBookings = currentBookings
