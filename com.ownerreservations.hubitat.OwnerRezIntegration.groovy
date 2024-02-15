@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc2' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.1-rc3' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -255,15 +255,15 @@ void updated() {
 // Setup event subscriptions, and any scheduled tasks
 void SyncState()
 {
-    Map bookings = helperGetBookings(state.bookings)
-    state.bookings = bookings
+    Map bookings = helperGetBookings(atomicState.bookings)
+    atomicState.bookings = bookings
     SyncState(bookings)
 }
 
 void SyncState(Map bookings)
 {
     // Only call if we've successfully connected to OwnerRez
-    if (state.orezId) {
+    if (atomicState.orezId) {
         subscribeToEvents()
         scheduleEvents(bookings)
         refreshDoorCodes()
@@ -337,19 +337,34 @@ void scheduleEvents(Map bookings) {
 void refreshDoorCodes() {
     log.debug 'refreshDoorCodes'
 
+    int i = 0
+
     locks.each { lock ->
         log.trace "refreshDoorCodes: lock ${lock.name}"
 
-        // Varies by lock driver, but this can iterate through all code positions over z-wave/zigbee and can take a while
-        lock.getCodes()
+        runIn(60 + (i++ * 90), 'tryRefreshDoorCodes', [overwrite: false, data: [ lockId: lock.id ]])
     }
+}
+
+void tryRefreshDoorCodes(Map data) {
+    log.debug "tryRefreshDoorCodes ${data}"
+
+    lock = locks.find { lock -> lock.id == data.lockId }
+
+    if (!lock) {
+        log.debug "tryRefreshDoorCodes: Lock not found"
+        return
+    }
+
+    // Varies by lock driver, but this can iterate through all code positions over z-wave/zigbee and can take a while
+    lock.getCodes()
 }
 
 // Reconcile door codes for all locks
 void reconcileDoorCodes() {
     log.debug 'reconcileDoorCodes (no args)'
 
-    Map bookings = helperGetBookings(state.bookings)
+    Map bookings = helperGetBookings(atomicState.bookings)
     reconcileDoorCodes(bookings)
 }
 
@@ -359,7 +374,7 @@ void reconcileDoorCodes(Map bookings) {
     // We only care about bookings that should be active right now
     Map currentBookings = helperFindCurrentBookings(bookings)
 
-    Boolean hasDeleted = false
+    int i = 0
 
     // Iterate through all locks
     locks.each { lock ->
@@ -390,18 +405,11 @@ void reconcileDoorCodes(Map bookings) {
                     codePosition = lockCode.key
                 }
 
-                log.trace "reconcileDoorCodes: deleteCode ${codePosition}"
+                log.trace "reconcileDoorCodes: tryDeleteCode ${lock.id} ${codePosition}"
 
                 // Remove the code
-                lock.deleteCode(codePosition)
-
-                hasDeleted = true
+                runIn(++i * 60, 'tryDeleteCode', [ overwrite: false, data: [ lockId: lock.id, codePosition: codePosition ]])
             }
-        }
-
-        // If we deleted a code, we need to let the locks update before adding new codes
-        if (hasDeleted) {
-            return
         }
 
         // Are there any active bookings
@@ -415,13 +423,13 @@ void reconcileDoorCodes(Map bookings) {
 
                 // Is the booking missing from the list of codes
                 if (!orezCodes[bookingId]) {
-                    log.debug "reconcileDoorCodes: setCode ${booking}"
+                    log.debug "reconcileDoorCodes: trySetCode ${booking}"
 
                     // Get the next available code position
                     int codePosition = availableCodePositions[index++]
 
                     // Create the code
-                    lock.setCode(codePosition, booking.code, codeName)
+                    runIn(++i * 60, 'trySetCode', [ overwrite: false, data: [ lockId: lock.id, codePosition: codePosition, code: booking.code, codeName: codeName ]])
                 }
                 // Is the booking's code different from the current code 
                 else if (orezCodes[bookingId].code != booking.code) {
@@ -435,22 +443,47 @@ void reconcileDoorCodes(Map bookings) {
                     }
 
                     // Re-set the code
-                    log.debug "reconcileDoorCodes: re-running setCode ${codePosition} ${booking}"
+                    log.debug "reconcileDoorCodes: re-running trySetCode ${codePosition} ${booking}"
 
-                    lock.setCode(codePosition, booking.code, codeName)
+                    runIn(++i * 60, 'trySetCode', [ overwrite: false, data: [ lockId: lock.id, codePosition: codePosition, code: booking.code, codeName: codeName ]])
                 }
             }
         }
     }
 
-    if (hasDeleted) {
-        // State wont change mid-app execution, so we need to schedule another run of reconcileDoorCodes
-        log.trace "reconcileDoorCodes: waiting for lock to update"
-        runIn(0, 'reconcileDoorCodes', [ overwrite: true, misfire: 'ignore' ])
-    }
-    else {
+    if (i == 0) {
+        log.debug 'reconcileDoorCodes: No codes to reconcile'
         scheduleEvents(bookings)
+    } else {
+        log.debug "reconcileDoorCodes: ${i} codes to reconcile"
+        runIn(++i * 60, 'reconcileDoorCodes', [ overwrite: true ])
     }
+}
+
+void trySetCode(Map data) {
+    log.debug "trySetCode (${data})"
+
+    def lock = locks.find { lock -> lock.id == data.lockId }
+
+    if (!lock) {
+        log.debug "trySetCode: Lock not found"
+        return
+    }
+
+    lock.setCode(data.codePosition, data.code, data.codeName)
+}
+
+void tryDeleteCode(Map data) {
+    log.debug "tryDeleteCode (${data})"
+
+    def lock = locks.find { lock -> lock.id == data.lockId }
+
+    if (!lock) {
+        log.debug "tryDeleteCode: Lock not found"
+        return
+    }
+
+    lock.deleteCode(data.codePosition)
 }
 
 // Send outbound webhook
@@ -576,11 +609,11 @@ Map orezHttpResponseJson(def data, int status = 200) {
 Map apiRegister() {
     log.debug "apiRegister: ${request.JSON}"
 
-    state.orezId = request.JSON.orezId
+    atomicState.orezId = request.JSON.orezId
 
     // Now that we have the OwnerRez Id, we can setup the webhook subscriptions
     // And schedule the reconcileDoorCodes tasks
-    Map bookings = helperGetBookings(state.bookings)
+    Map bookings = helperGetBookings(atomicState.bookings)
     SyncState(bookings)
 
     return apiGetInfo()
@@ -590,10 +623,10 @@ Map apiRegister() {
 void apiUnregister() {
     log.debug 'apiUnregister'
 
-    state.orezId = null
+    atomicState.orezId = null
 
     // This will break the connection until the user reconnects
-    state.accessToken = null
+    atomicState.accessToken = null
 
     // Unsubscribe from events and unschedule tasks
     unschedule()
@@ -605,14 +638,14 @@ Map apiGetInfo() {
     log.debug 'apiGetInfo'
 
     return orezHttpResponseJson([
-        orezId: state.orezId,
+        orezId: atomicState.orezId,
         hubId: hubUID,
         appId: app.id,
         endpoint: fullApiServerUrl,
         version: orezAppVersion,
         location: location.name,
         name: location.hub.name,
-        bookings: state.bookings,
+        bookings: atomicState.bookings,
         nextBooking: helperFindNextBooking(null),
     ])
 }
@@ -729,26 +762,28 @@ def apiExecuteCommand() {
 Map apiSync() {
     log.debug "apiSync ${request.JSON}"
 
-    state.bookings = helperGetBookings(request.JSON)
-    scheduleEvents(state.bookings)
-    reconcileDoorCodes(state.bookings)
+    atomicState.bookings = helperGetBookings(request.JSON)
+    scheduleEvents(atomicState.bookings)
+
+    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
 
     return orezHttpResponseJson([
-        bookings: state.bookings,
-        nextBooking: helperFindNextBooking(state.bookings),
+        bookings: atomicState.bookings,
+        nextBooking: helperFindNextBooking(atomicState.bookings),
     ])
 }
 
 Map apiSyncPatch() {
     log.debug "apiSyncPatch ${request.JSON}"
 
-    state.bookings = helperGetBookings(state.bookings + request.JSON)
-    scheduleEvents(state.bookings)
-    reconcileDoorCodes(state.bookings)
+    atomicState.bookings = helperGetBookings(atomicState.bookings + request.JSON)
+    scheduleEvents(atomicState.bookings)
+
+    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
 
     return orezHttpResponseJson([
-        bookings: state.bookings,
-        nextBooking: helperFindNextBooking(state.bookings),
+        bookings: atomicState.bookings,
+        nextBooking: helperFindNextBooking(atomicState.bookings),
     ])
 }
 
@@ -766,7 +801,7 @@ Map apiSyncBookingByLock() {
     log.debug "apiSyncBookingByLock ${params.bookingId} ${params.lockId}"
 
     String key = params.bookingId
-    Map existing = state.bookings[key]
+    Map existing = atomicState.bookings[key]
     Map booking = request.JSON
 
     // If the booking is already in the state, merge the lockId
@@ -783,21 +818,22 @@ Map apiSyncBookingByLock() {
     }
 
     booking.lockId = booking.lockId.unique()
-    state.bookings[key] = booking
-    state.bookings = helperGetBookings(state.bookings)
-    scheduleEvents(state.bookings)
-    reconcileDoorCodes(state.bookings)
+    atomicState.bookings[key] = booking
+    atomicState.bookings = helperGetBookings(atomicState.bookings)
+    scheduleEvents(atomicState.bookings)
+
+    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
 
     // If you try to save a booking that's already passed, it will be removed by helperGetBookings
-    if (state.bookings[key] == null) {
+    if (atomicState.bookings[key] == null) {
         return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
     }
 
-    if (helperHasDuplicateCode(params.lockId, state.bookings[key])) {
+    if (helperHasDuplicateCode(params.lockId, atomicState.bookings[key])) {
         return orezHttpResponseJson([ error: "Duplicate code: '${booking.code}'."], 409)
     }
 
-    return orezHttpResponseJson(state.bookings[key])
+    return orezHttpResponseJson(atomicState.bookings[key])
 }
 
 // Delete a single booking, schedule tasks, and reconcile door codes
@@ -815,7 +851,7 @@ void apiDeleteBookingByLock() {
 
     String key = params.bookingId
 
-    Map bookings = state.bookings.collectEntries { k, booking ->
+    Map bookings = atomicState.bookings.collectEntries { k, booking ->
         if (k == key) {
             booking.lockId = booking.lockId - params.lockId
         }
@@ -825,9 +861,10 @@ void apiDeleteBookingByLock() {
         return booking.lockId.size() > 0
     }
 
-    state.bookings = helperGetBookings(bookings)
+    atomicState.bookings = helperGetBookings(bookings)
     scheduleEvents(bookings)
-    reconcileDoorCodes(bookings)
+
+    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
 }
 
 // Help functions
