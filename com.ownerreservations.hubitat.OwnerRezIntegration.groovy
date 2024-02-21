@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc3' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.1-rc4' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -657,7 +657,7 @@ Map apiGetDevices() {
     List resp = []
 
     locks.each { lock ->
-        resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label]
+        resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label ?: lock.displayName]
     }
 
     return orezHttpResponseJson(resp)
@@ -690,7 +690,10 @@ Map apiGetDevice() {
         ]}.collect { attr ->
             switch (attr.dataType) {
                 case 'JSON_OBJECT':
+                    if (attr.currentValue)
                     attr.currentValue = parseJson(attr.currentValue)
+                    else
+                        attr.currentValue = null
                     break
             }
 
@@ -800,8 +803,9 @@ Map apiSyncBooking() {
 Map apiSyncBookingByLock() {
     log.debug "apiSyncBookingByLock ${params.bookingId} ${params.lockId}"
 
+    Map bookings = atomicState.bookings
     String key = params.bookingId
-    Map existing = atomicState.bookings[key]
+    Map existing = bookings[key]
     Map booking = request.JSON
 
     // If the booking is already in the state, merge the lockId
@@ -818,9 +822,11 @@ Map apiSyncBookingByLock() {
     }
 
     booking.lockId = booking.lockId.unique()
-    atomicState.bookings[key] = booking
-    atomicState.bookings = helperGetBookings(atomicState.bookings)
-    scheduleEvents(atomicState.bookings)
+    bookings[key] = booking
+    bookings = helperGetBookings(bookings)
+    scheduleEvents(bookings)
+
+    atomicState.bookings = bookings
 
     runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
 
