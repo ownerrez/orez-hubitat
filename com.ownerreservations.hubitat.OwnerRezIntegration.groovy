@@ -652,7 +652,7 @@ Map apiGetInfo() {
 
 // Get simplified list of devices
 Map apiGetDevices() {
-    log.debug 'apiGetDevice'
+    log.debug 'apiGetDevices'
 
     List resp = []
 
