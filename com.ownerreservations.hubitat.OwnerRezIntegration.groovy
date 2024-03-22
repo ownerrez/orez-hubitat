@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc4' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.1-rc5' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -835,7 +835,7 @@ Map apiSyncBookingByLock() {
         return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
     }
 
-    if (helperHasDuplicateCode(params.lockId, atomicState.bookings[key])) {
+    if (helperHasDuplicateCode(params.lockId, atomicState.bookings[key], atomicState.bookings)) {
         return orezHttpResponseJson([ error: "Duplicate code: '${booking.code}'."], 409)
     }
 
@@ -911,7 +911,7 @@ Map helperGetBookings(Map bookings) {
 }
 
 // Check for duplicate code
-boolean helperHasDuplicateCode(String lockId, Map booking) {
+boolean helperHasDuplicateCode(String lockId, Map booking, Map bookings = null) {
     log.debug "helperHasDuplicateCode ${lockId} ${booking.id} ${booking.code}"
 
     def lock = locks.find { lock -> lock.id == lockId }
@@ -920,12 +920,35 @@ boolean helperHasDuplicateCode(String lockId, Map booking) {
         return false
     }
 
-    Map lockCodes = parseJson(lock.currentValue('lockCodes', true))
+    String lockCodesJson = lock.currentValue('lockCodes', true);
+
+    if (!lockCodesJson) {
+        return false
+    }
+
+    Map lockCodes = parseJson(lockCodesJson)
 
     String codeName = helperGetCodeName(booking)
 
     return lockCodes.any { k, existing ->
-        return existing.name != codeName && existing.code == booking.code
+        if (existing.name == codeName || existing.code != booking.code) {
+            return false
+        }
+
+        if (existing.name.startsWith('ORB')) {
+            // Match to existing OwnerRez code
+            String[] parts = existing.name.split('-')
+            String bookingId = parts[0]
+            if (bookings && bookings.containsKey(bookingId)) {
+                // Only warn if the bookings overlap check-in to check-out
+                Map otherBooking = bookings[bookingId]
+                log.debug "helperHasDuplicateCode: checking active booking ${otherBooking}"
+                // Other booking is already active, so we only need to check that the check-out date is after the check-in date
+                return otherBooking.checkOut > booking.checkIn
+            }
+        }
+
+        return true
     }
 }
 
