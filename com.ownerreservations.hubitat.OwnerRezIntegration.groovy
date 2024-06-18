@@ -3,7 +3,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc5' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.1-rc6' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
@@ -763,31 +763,55 @@ def apiExecuteCommand() {
 
 // Sync all bookings (replaces state.bookings), schedule tasks, and reconcile door codes
 Map apiSync() {
-    log.debug "apiSync ${request.JSON}"
+    try {
+        log.debug "apiSync ${request.JSON}"
 
-    atomicState.bookings = helperGetBookings(request.JSON)
-    scheduleEvents(atomicState.bookings)
+        atomicState.bookings = helperGetBookings(request.JSON)
+        scheduleEvents(atomicState.bookings)
 
-    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
+        runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
 
-    return orezHttpResponseJson([
-        bookings: atomicState.bookings,
-        nextBooking: helperFindNextBooking(atomicState.bookings),
-    ])
+        return orezHttpResponseJson([
+            bookings: atomicState.bookings,
+            nextBooking: helperFindNextBooking(atomicState.bookings),
+        ])
+    } catch (Exception ex) {
+        log.error "apiSync: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([
+            bookings: atomicState.bookings,
+            nextBooking: helperFindNextBooking(atomicState.bookings),
+            error: ex.message
+        ], 500)
+    }
 }
 
 Map apiSyncPatch() {
-    log.debug "apiSyncPatch ${request.JSON}"
+    try {
+        log.debug "apiSyncPatch ${request.JSON}"
 
-    atomicState.bookings = helperGetBookings(atomicState.bookings + request.JSON)
-    scheduleEvents(atomicState.bookings)
+        def combined = atomicState.bookings + request.JSON
 
-    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
+        atomicState.bookings = helperGetBookings(combined)
+        scheduleEvents(atomicState.bookings)
 
-    return orezHttpResponseJson([
-        bookings: atomicState.bookings,
-        nextBooking: helperFindNextBooking(atomicState.bookings),
-    ])
+        runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
+
+        return orezHttpResponseJson([
+            bookings: atomicState.bookings,
+            nextBooking: helperFindNextBooking(atomicState.bookings),
+        ])
+    } catch (Exception ex) {
+        log.error "apiSyncPatch: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([
+            bookings: atomicState.bookings,
+            nextBooking: helperFindNextBooking(atomicState.bookings),
+            error: ex.message
+        ], 500)
+    }
 }
 
 // Sync a single booking, schedule tasks, and reconcile door codes
