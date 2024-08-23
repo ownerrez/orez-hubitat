@@ -1,9 +1,14 @@
+// License: AGPL-3.0
+// Author: OwnerRez, Inc
+// Description: OwnerRez Hubitat Integration
+// https://github.com/ownerrez/orez-hubitat
+
 // Groovy scripts do not have constants, so we use functions instead
 // Functions that start with get can be referenced as variables,
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc6' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.1-rc7' } // major.minor.patch[-prerelease] 
 
 import groovy.json.JsonOutput
 
