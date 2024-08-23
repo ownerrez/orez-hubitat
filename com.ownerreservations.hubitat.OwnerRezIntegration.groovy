@@ -6,7 +6,7 @@
 // Groovy scripts do not have constants, so we use functions instead
 // Functions that start with get can be referenced as variables,
 // i.e. "getFunctionName" can be referenced as "functionName"
-String getOrezBaseSecureUrl() { 'https://secure.ownerrez.com' }
+String getOrezBaseSecureUrl() { 'https://app.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
 String getOrezAppVersion() { '1.1.1-rc7' } // major.minor.patch[-prerelease] 
 
@@ -393,7 +393,14 @@ void reconcileDoorCodes(Map bookings) {
         log.trace "reconcileDoorCodes: current lock bookings ${currentLockBookings}"
 
         // Get the lock's current codes, as we don't remove non-OwnerRez codes
-        Map lockCodes = parseJson(lock.currentValue('lockCodes', true))
+        def lockCodesRaw = lock.currentValue('lockCodes', true)
+
+        if (!lockCodesRaw) {
+            log.debug "reconcileDoorCodes: No lock codes"
+            return
+        }
+
+        Map lockCodes = parseJson(lockCodesRaw)
         Map orezCodes = helperOnlyOrezCodes(lockCodes)
         log.trace "reconcileDoorCodes: lock codes ${lockCodes}"
         log.trace "reconcileDoorCodes: orez codes ${orezCodes}"
@@ -604,7 +611,7 @@ Map orezHttpResponseJson(def data, int status = 200) {
         headers: [
             'X-Hubitat-Orez-Version': orezAppVersion,
         ],
-        data: JsonOutput.toJson(data),
+        data: data ? JsonOutput.toJson(data) : null,
     ]
 }
 
@@ -672,53 +679,57 @@ Map apiGetDevices() {
 Map apiGetDevice() {
     log.debug "apiGetDevice: $params"
 
-    def deviceId = params.deviceId
-    def lock = locks.find { lock -> lock.id == deviceId }
+    try {
+        def deviceId = params.deviceId
+        def lock = locks.find { lock -> lock.id == deviceId }
 
-    if (!lock) {
-        return orezHttpResponseJson([ error: 'Device not found' ], 404)
-    }
+        if (!lock) {
+            return orezHttpResponseJson([ error: 'Device not found' ], 404)
+        }
 
-    Map resp = [
-        id: lock.id,
-        name: lock.name,
-        type: lock.typeName,
-        label: lock.label,
-        displayName: lock.displayName,
-        // Simplify the attibutes as the data structure is too complex/verbose
-        attributes: lock.supportedAttributes.collect { attr ->
-        [
-            name: attr.name,
-            dataType: attr.dataType,
-            values: attr.values,
-            currentValue: lock.currentValue(attr.name),
-        ]}.collect { attr ->
-            switch (attr.dataType) {
-                case 'JSON_OBJECT':
-                    if (attr.currentValue)
-                    attr.currentValue = parseJson(attr.currentValue)
-                    else
-                        attr.currentValue = null
-                    break
-            }
+        Map resp = [
+            id: lock.id,
+            name: lock.name,
+            type: lock.typeName,
+            label: lock.label,
+            displayName: lock.displayName,
+            // Simplify the attibutes as the data structure is too complex/verbose
+            attributes: lock.supportedAttributes.collect { attr ->
+            [
+                name: attr.name,
+                dataType: attr.dataType,
+                values: attr.values,
+                currentValue: lock.currentValue(attr.name),
+            ]}.collect { attr ->
+                switch (attr.dataType) {
+                    case 'JSON_OBJECT':
+                        if (attr.currentValue)
+                        attr.currentValue = parseJson(attr.currentValue)
+                        else
+                            attr.currentValue = null
+                        break
+                }
 
-            return attr
-        },
-        // Simplify the commands as the data structure is too complex/verbose
-        commands: lock.supportedCommands.collect { cmd -> [
-            name: cmd.name,
-            arguments: cmd.arguments,
-            parameters: cmd.parameters.collect { param -> [
-                name: param.name,
-                type: param.type,
-                description: param.description,
+                return attr
+            },
+            // Simplify the commands as the data structure is too complex/verbose
+            commands: lock.supportedCommands.collect { cmd -> [
+                name: cmd.name,
+                arguments: cmd.arguments,
+                parameters: cmd.parameters.collect { param -> [
+                    name: param.name,
+                    type: param.type,
+                    description: param.description,
+                ]},
             ]},
-        ]},
-        // Just need the capabilities names
-        capabilities: lock.capabilities.collect { cap -> cap.name },
-    ]
+            // Just need the capabilities names
+            capabilities: lock.capabilities.collect { cap -> cap.name },
+        ]
 
-    return orezHttpResponseJson(resp)
+        return orezHttpResponseJson(resp)
+    } catch (e) {
+        return orezHttpResponseJson([ error: e.message ], 500)
+    }
 }
 
 // Execute a command on a device
@@ -726,26 +737,26 @@ Map apiGetDevice() {
 def apiExecuteCommand() {
     log.debug "apiExecuteCommand: $params ${request.JSON}"
 
-    def deviceId = params.deviceId
-    def lock = locks.find { lock -> lock.id == deviceId }
-
-    if (!lock) {
-        return orezHttpResponseJson([ error: 'Device not found' ], 404)
-    }
-
-    def command = params.command
-    def cmd = lock.supportedCommands.find { cmd -> cmd.name == command }
-
-    if (!cmd) {
-        return orezHttpResponseJson([ error: 'Command not found' ], 404)
-    }
-
-    // Even if just an empty object, gotta pass in something
-    if (request.JSON == null) {
-        return orezHttpResponseJson([ error: 'No JSON body' ], 400)
-    }
-
     try {
+        def deviceId = params.deviceId
+        def lock = locks.find { lock -> lock.id == deviceId }
+
+        if (!lock) {
+            return orezHttpResponseJson([ error: 'Device not found' ], 404)
+        }
+
+        def command = params.command
+        def cmd = lock.supportedCommands.find { cmd -> cmd.name == command }
+
+        if (!cmd) {
+            return orezHttpResponseJson([ error: 'Command not found' ], 404)
+        }
+
+        // Even if just an empty object, gotta pass in something
+        if (request.JSON == null) {
+            return orezHttpResponseJson([ error: 'No JSON body' ], 400)
+        }
+
         switch (command) {
             case 'lock':
             case 'unlock':
@@ -823,83 +834,113 @@ Map apiSyncPatch() {
 Map apiSyncBooking() {
     log.debug "apiSyncBooking ${params.bookingId}"
 
-    params.lockId = request.JSON.lockId
+    try {
+        params.lockId = request.JSON.lockId
 
-    return apiSyncBookingByLock()
+        return apiSyncBookingByLock()
+    } catch (Exception ex) {
+        log.error "apiSyncBooking: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
+    }
 }
 
 // Sync a single booking, by lockID, schedule tasks, and reconcile door codes
 Map apiSyncBookingByLock() {
     log.debug "apiSyncBookingByLock ${params.bookingId} ${params.lockId}"
 
-    Map bookings = atomicState.bookings
-    String key = params.bookingId
-    Map existing = bookings[key]
-    Map booking = request.JSON
+    try {
+        Map bookings = atomicState.bookings
+        String key = params.bookingId
+        Map existing = bookings[key]
+        Map booking = request.JSON
 
-    // If the booking is already in the state, merge the lockId
-    if (existing) {
-        booking = existing + booking
-        if (existing.lockId instanceof List) {
-            booking.lockId = existing.lockId
+        // If the booking is already in the state, merge the lockId
+        if (existing) {
+            booking = existing + booking
+            if (existing.lockId instanceof List) {
+                booking.lockId = existing.lockId
+            } else {
+                booking.lockId = [existing.lockId]
+            }
+            booking.lockId << params.lockId
         } else {
-            booking.lockId = [existing.lockId]
+            booking.lockId = [params.lockId]
         }
-        booking.lockId << params.lockId
-    } else {
-        booking.lockId = [params.lockId]
+
+        booking.lockId = booking.lockId.unique()
+        bookings[key] = booking
+        bookings = helperGetBookings(bookings)
+        scheduleEvents(bookings)
+
+        atomicState.bookings = bookings
+
+        runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
+
+        // If you try to save a booking that's already passed, it will be removed by helperGetBookings
+        if (atomicState.bookings[key] == null) {
+            return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
+        }
+
+        if (helperHasDuplicateCode(params.lockId, atomicState.bookings[key], atomicState.bookings)) {
+            return orezHttpResponseJson([ error: "Duplicate code: '${booking.code}'."], 409)
+        }
+
+        return orezHttpResponseJson(atomicState.bookings[key])
+    } catch (Exception ex) {
+        log.error "apiSyncBookingByLock: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
     }
-
-    booking.lockId = booking.lockId.unique()
-    bookings[key] = booking
-    bookings = helperGetBookings(bookings)
-    scheduleEvents(bookings)
-
-    atomicState.bookings = bookings
-
-    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
-
-    // If you try to save a booking that's already passed, it will be removed by helperGetBookings
-    if (atomicState.bookings[key] == null) {
-        return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
-    }
-
-    if (helperHasDuplicateCode(params.lockId, atomicState.bookings[key], atomicState.bookings)) {
-        return orezHttpResponseJson([ error: "Duplicate code: '${booking.code}'."], 409)
-    }
-
-    return orezHttpResponseJson(atomicState.bookings[key])
 }
 
 // Delete a single booking, schedule tasks, and reconcile door codes
-void apiDeleteBooking() {
+Map apiDeleteBooking() {
     log.debug "apiDeleteBooking ${params.bookingId}"
 
-    params.lockId = request.JSON.lockId
+    try {
+        params.lockId = request.JSON.lockId
 
-    apiDeleteBookingByLock()
+        return apiDeleteBookingByLock()
+    } catch (Exception ex) {
+        log.error "apiDeleteBooking: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
+    }
 }
 
 // Delete a single booking, schedule tasks, and reconcile door codes
-void apiDeleteBookingByLock() {
+Map apiDeleteBookingByLock() {
     log.debug "apiDeleteBookingByLock ${params.bookingId} ${params.lockId}"
 
-    String key = params.bookingId
+    try {
+        String key = params.bookingId
 
-    Map bookings = atomicState.bookings.collectEntries { k, booking ->
-        if (k == key) {
-            booking.lockId = booking.lockId - params.lockId
+        Map bookings = atomicState.bookings.collectEntries { k, booking ->
+            if (k == key) {
+                booking.lockId = booking.lockId - params.lockId
+            }
+            return [ k, booking ]
         }
-        return [ k, booking ]
-    }
-    .findAll { k, booking ->
-        return booking.lockId.size() > 0
-    }
+        .findAll { k, booking ->
+            return booking.lockId.size() > 0
+        }
 
-    atomicState.bookings = helperGetBookings(bookings)
-    scheduleEvents(bookings)
+        atomicState.bookings = helperGetBookings(bookings)
+        scheduleEvents(bookings)
 
-    runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
+        runIn(10, 'reconcileDoorCodes', [ overwrite: true ])
+
+        return orezHttpResponseJson(null)
+    } catch (Exception ex) {
+        log.error "apiDeleteBookingByLock: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
+    }
 }
 
 // Help functions
