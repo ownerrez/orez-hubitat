@@ -8,7 +8,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://app.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc7' } // major.minor.patch[-prerelease] 
+String getOrezAppVersion() { '1.1.1-rc7' } // major.minor.patch[-prerelease]
 
 import groovy.json.JsonOutput
 
@@ -443,7 +443,7 @@ void reconcileDoorCodes(Map bookings) {
                     // Create the code
                     runIn(++i * 60, 'trySetCode', [ overwrite: false, data: [ lockId: lock.id, codePosition: codePosition, code: booking.code, codeName: codeName ]])
                 }
-                // Is the booking's code different from the current code 
+                // Is the booking's code different from the current code
                 else if (orezCodes[bookingId].code != booking.code) {
                     int codePosition
 
@@ -621,58 +621,88 @@ Map orezHttpResponseJson(def data, int status = 200) {
 Map apiRegister() {
     log.debug "apiRegister: ${request.JSON}"
 
-    atomicState.orezId = request.JSON.orezId
+    try {
+        atomicState.orezId = request.JSON.orezId
 
-    // Now that we have the OwnerRez Id, we can setup the webhook subscriptions
-    // And schedule the reconcileDoorCodes tasks
-    Map bookings = helperGetBookings(atomicState.bookings)
-    SyncState(bookings)
+        // Now that we have the OwnerRez Id, we can setup the webhook subscriptions
+        // And schedule the reconcileDoorCodes tasks
+        Map bookings = helperGetBookings(atomicState.bookings)
+        SyncState(bookings)
 
-    return apiGetInfo()
+        return apiGetInfo()
+    } catch (Exception ex) {
+        log.error "apiRegister: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
+    }
 }
 
 // Disassociate the OwnerRez account from this hub
-void apiUnregister() {
+Map apiUnregister() {
     log.debug 'apiUnregister'
 
-    atomicState.orezId = null
+    try {
+        atomicState.orezId = null
 
-    // This will break the connection until the user reconnects
-    atomicState.accessToken = null
+        // This will break the connection until the user reconnects
+        atomicState.accessToken = null
 
-    // Unsubscribe from events and unschedule tasks
-    unschedule()
-    unsubscribe()
+        // Unsubscribe from events and unschedule tasks
+        unschedule()
+        unsubscribe()
+
+        return orezHttpResponseJson(null)
+    } catch (Exception ex) {
+        log.error "apiUnregister: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
+    }
 }
 
  // Get basic hub info, including bookings
 Map apiGetInfo() {
     log.debug 'apiGetInfo'
 
-    return orezHttpResponseJson([
-        orezId: atomicState.orezId,
-        hubId: hubUID,
-        appId: app.id,
-        endpoint: fullApiServerUrl,
-        version: orezAppVersion,
-        location: location.name,
-        name: location.hub.name,
-        bookings: atomicState.bookings,
-        nextBooking: helperFindNextBooking(null),
-    ])
+    try {
+        return orezHttpResponseJson([
+            orezId: atomicState.orezId,
+            hubId: hubUID,
+            appId: app.id,
+            endpoint: fullApiServerUrl,
+            version: orezAppVersion,
+            location: location.name,
+            name: location.hub.name,
+            bookings: atomicState.bookings,
+            nextBooking: helperFindNextBooking(null),
+        ])
+    } catch (Exception ex) {
+        log.error "apiGetInfo: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
+    }
 }
 
 // Get simplified list of devices
 Map apiGetDevices() {
     log.debug 'apiGetDevices'
 
-    List resp = []
+    try {
+        List resp = []
 
-    locks.each { lock ->
-        resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label ?: lock.displayName]
+        locks.each { lock ->
+            resp << [id: lock.id, name: lock.name, type: lock.typeName, label: lock.label ?: lock.displayName]
+        }
+
+        return orezHttpResponseJson(resp)
+    } catch (Exception ex) {
+        log.error "apiGetDevices: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
     }
-
-    return orezHttpResponseJson(resp)
 }
 
 // Get detailed per-device info
@@ -727,8 +757,11 @@ Map apiGetDevice() {
         ]
 
         return orezHttpResponseJson(resp)
-    } catch (e) {
-        return orezHttpResponseJson([ error: e.message ], 500)
+    } catch (Exception ex) {
+        log.error "apiGetDevice: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
     }
 }
 
@@ -772,8 +805,11 @@ def apiExecuteCommand() {
             default:
                 return orezHttpResponseJson([ error: 'Command not supported' ], 400)
         }
-    } catch (e) {
-        return orezHttpResponseJson([ error: e.message ], 500)
+    } catch (Exception ex) {
+        log.error "apiExecuteCommand: ${ex.message}"
+        log.trace ex.stackTrace
+
+        return orezHttpResponseJson([ error: ex.message ], 500)
     }
 }
 
