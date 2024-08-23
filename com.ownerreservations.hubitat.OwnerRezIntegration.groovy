@@ -8,7 +8,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://app.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.1-rc7' } // major.minor.patch[-prerelease]
+String getOrezAppVersion() { '1.1.2' } // major.minor.patch[-prerelease]
 
 import groovy.json.JsonOutput
 
