@@ -8,7 +8,7 @@
 // i.e. "getFunctionName" can be referenced as "functionName"
 String getOrezBaseSecureUrl() { 'https://app.ownerrez.com' }
 String getOrezBaseFastUrl() { 'https://fast.ownerrez.com' }
-String getOrezAppVersion() { '1.1.2' } // major.minor.patch[-prerelease]
+String getOrezAppVersion() { '1.1.3' } // major.minor.patch[-prerelease]
 
 import groovy.json.JsonOutput
 
@@ -916,7 +916,8 @@ Map apiSyncBookingByLock() {
 
         // If you try to save a booking that's already passed, it will be removed by helperGetBookings
         if (atomicState.bookings[key] == null) {
-            return orezHttpResponseJson([ error: 'Could not save booking.'], 400)
+            booking.code = null
+            return orezHttpResponseJson(booking, 202)
         }
 
         if (helperHasDuplicateCode(params.lockId, atomicState.bookings[key], atomicState.bookings)) {
