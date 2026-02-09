@@ -294,6 +294,7 @@ void subscribeToEvents() {
     subscribe(locks, 'codeChanged', codeChangedHandler)
     subscribe(locks, 'maxCodes', maxCodesHandler)
     subscribe(locks, 'codeLength', codeLengthHandler)
+    subscribe(locks, 'battery', batteryHandler)
 }
 
 // Setup scheduled tasks for all bookings
@@ -554,6 +555,10 @@ void maxCodesHandler(e) {
 }
 
 void codeLengthHandler(e) {
+    webhook(e)
+}
+
+void batteryHandler(e) {
     webhook(e)
 }
 
